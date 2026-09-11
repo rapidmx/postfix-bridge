@@ -2,7 +2,8 @@
 
 [![CI](https://github.com/RapidMX/postfix-bridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RapidMX/postfix-bridge/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/RapidMX/postfix-bridge/badge.svg?branch=main)](https://coveralls.io/github/RapidMX/postfix-bridge?branch=main)
-[![npm version](https://img.shields.io/npm/v/@rapidmx/postfix-bridge)](https://www.npmjs.com/package/@rapidmx/postfix-bridge)
+[![docker version](https://github.com/rapidmx/server/pkgs/container/server/badge.svg)](https://github.com/rapidmx/server/pkgs/container/server)
+[![helm version](https://github.com/rapidmx/server/pkgs/container/charts%2Fmail-server/badge.svg)](https://github.com/rapidmx/server/pkgs/container/charts%2Fmail-server)
 
 Provides a bridge between Postfix and the RapidMX server.
 

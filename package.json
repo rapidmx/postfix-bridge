@@ -16,7 +16,9 @@
     "lint": "eslint ./src ./test",
     "start": "node dist/src/index.js",
     "test": "vitest run --coverage",
-    "test:watch": "vitest --watch --coverage"
+    "test:watch": "vitest --watch --coverage",
+    "release": "rapidrest release",
+    "prepublish": "yarn build"
   },
   "prettier": {
     "printWidth": 120,
@@ -29,6 +31,7 @@
     "smtp-server": "^3.13.6"
   },
   "devDependencies": {
+    "@rapidrest/cli": "^1.0.1",
     "@types/node": "^26.5.0",
     "@types/nodemailer": "^8.0.1",
     "@types/smtp-server": "^3.5.10",
