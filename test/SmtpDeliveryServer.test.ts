@@ -40,6 +40,19 @@ describe("SmtpDeliveryServer Tests", () => {
         expect(raw.toString()).toContain("Subject: Hi");
     });
 
+    it("Passes an empty envelopeFrom when the transaction has a null reverse-path (a bounce).", async () => {
+        await start();
+        const transport = nodemailer.createTransport({ host: "127.0.0.1", port, secure: false, tls: { rejectUnauthorized: false } });
+
+        await transport.sendMail({
+            envelope: { from: "", to: ["b@example.com"] },
+            raw: "From: \r\nTo: b@example.com\r\nSubject: Bounce\r\n\r\nBody\r\n",
+        });
+
+        const [envelopeFrom] = deliverMock.mock.calls[0];
+        expect(envelopeFrom).toBe("");
+    });
+
     it("Rejects the SMTP transaction with a 4xx (retryable) code when deliver() fails.", async () => {
         deliverMock = vi.fn();
         await start();
