@@ -57,7 +57,7 @@ jobs:
             ${{ runner.os }}-yarn-
 
       - name: Install system dependencies
-        run: apt-get update && apt-get install -y --no-install-recommends libcurl4 curl
+        run: apt-get update && apt-get install -y --no-install-recommends build-essential python3 ca-certificates libcurl4 curl
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
