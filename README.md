@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rapidmx/postfix-bridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rapidmx/postfix-bridge/actions/workflows/ci.yml)
 
-Provides a bridges between Postfix and the RapidMX server.
+Provides a bridge between Postfix and the RapidMX server.
 
 Bridges Postfix's own protocols, `tcp_table` lookups for recipient/domain validation, plain SMTP for
 final delivery hand-off, to the `MTAIngestAdapter` HTTP contract a [RapidMX server](https://github.com/rapidmx/server) exposes at `/internal/mta`. It is a small, standalone Node.js service.

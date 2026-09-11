@@ -18,8 +18,11 @@ A good bug report includes:
 - What you **Expected** to happen, and what happened instead (**Actual**)
 - The **Reproduction Rate** (e.g. 3/3 with a minimum 3 tries) (**Repo Rate**)
 - The **Severity** of the bug (e.g. _BLOCKER_, _HIGH_, _MEDIUM_, _LOW_)
-- The **Project Info** containing the version of this package, dependent @rapidrest packages (e.g. core, service-core, cli), and your Node.js version
-- Include screenshots, crashdumps, logs, etc. when possible
+- The **Project Info** containing the version of this bridge, the version of the
+  [RapidMX server](https://github.com/rapidmx/server) it's forwarding to, your Postfix version, and
+  your Node.js version
+- Include screenshots, crashdumps, logs, etc. when possible — Postfix's own mail log
+  (`/var/log/mail.log` or `journalctl -u postfix`) is usually the most useful thing to attach
 
 Make sure to be as detailed as possible.
 
@@ -27,25 +30,26 @@ Make sure to be as detailed as possible.
 
 ```
 Steps to Reproduce:
-1. `yarn install` and `rapidrest dev` in a fresh clone
-2. Open `http://localhost:3000/admin`
-3. Log in with a seeded admin account
+1. Configure Postfix's `relay_recipient_maps` to query this bridge's tcp_table on
+   `MTA_BRIDGE_RECIPIENT_PORT`
+2. Send a message to a recipient that exists in a `server` mailbox
+3. Check Postfix's mail log for the tcp_table response
 
 Repro Rate: 3/3
 
 Expected:
-The admin console loads and lists existing user accounts
+tcp_table returns `200 <mailbox-uid>` and Postfix accepts the recipient
 
 Actual:
-The page renders apps/admin's _500.tsx error page
-// Insert full stack trace / browser console output
+tcp_table returns `500` and Postfix defers the message
+// Insert full stack trace / mail log excerpt / MTA_INGEST_BASE_URL response body
 
 Severity: BLOCKER
 
 Project Info:
-@rapidmx/restapi: v1.0.0
-@rapidrest/react: v1.0.0
-@rapidrest/service-core: v1.2.1
+postfix-bridge: v0.1.0
+RapidMX server: v1.0.0
+Postfix: 3.8
 NodeJS: 24.0
 ```
 
@@ -58,8 +62,8 @@ Good feature requests start with the phrase "As a [developer|end-user] I would l
 #### Example
 
 ```
-As an end-user I would like the admin console to show each account's last login time and IP,
-so administrators can audit suspicious activity without querying the database directly.
+As an operator I would like `postfix-bridge` to cache `tcp_table` lookups briefly, so a
+`server` restart doesn't cause every in-flight Postfix delivery attempt to defer at once.
 ```
 
 ## Development setup
