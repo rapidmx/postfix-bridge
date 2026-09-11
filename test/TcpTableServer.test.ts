@@ -67,6 +67,15 @@ describe("TcpTableServer Tests", () => {
         expect(response).toBe("400 upstream%20unreachable");
     });
 
+    it("Responds 400 with a generic message when the lookup callback throws a value with no message.", async () => {
+        await start(async () => {
+            // eslint-disable-next-line no-throw-literal
+            throw { code: "ECONNRESET" };
+        });
+        const response = await sendLine(port, "get example.com");
+        expect(response).toBe("400 internal%20error");
+    });
+
     it("Percent-decodes the request key before passing it to the lookup callback.", async () => {
         let receivedKey: string | undefined;
         await start(async (key) => {
@@ -93,6 +102,50 @@ describe("TcpTableServer Tests", () => {
         await start(async () => ({ found: true, value: "x" }));
         const response = await sendLine(port, "get");
         expect(response).toBe("400 missing%20key");
+    });
+
+    it("Skips handling a queued line if the socket was already destroyed by the time it's dequeued.", async () => {
+        const lookupMock = vi.fn();
+        await start(lookupMock);
+        const fakeSocket = { destroyed: true, write: vi.fn() } as unknown as net.Socket;
+
+        await (server as unknown as { handleLine: (socket: net.Socket, line: string) => Promise<void> }).handleLine(
+            fakeSocket,
+            "get example.com",
+        );
+
+        expect(lookupMock).not.toHaveBeenCalled();
+        expect(fakeSocket.write).not.toHaveBeenCalled();
+    });
+
+    it("Swallows a socket error event without crashing (e.g. a client disconnecting abruptly).", async () => {
+        await start(async () => ({ found: true, value: "x" }));
+        // handleConnection()'s own `socket.on("error", () => {})` is attached synchronously as part of the
+        // "connection" event - registering another "connection" listener here (net.createServer's own
+        // callback argument is itself just sugar for `.on("connection", callback)`, so this runs alongside
+        // it, not instead of it) lets this test synthesize a socket error deterministically instead of
+        // racing a real abrupt disconnect.
+        const socketErrored = new Promise<void>((resolve) => {
+            (server as any).server.on("connection", (socket: net.Socket) => {
+                socket.emit("error", new Error("ECONNRESET"));
+                resolve();
+            });
+        });
+
+        const client = net.createConnection({ port, host: "127.0.0.1" });
+        await new Promise<void>((resolve) => client.once("connect", resolve));
+        await socketErrored;
+        client.destroy();
+    });
+
+    it("Rejects close() if the underlying net.Server reports an error while closing.", async () => {
+        await start(async () => ({ found: true, value: "x" }));
+        const closeError = new Error("boom");
+        // `mockImplementationOnce` only intercepts this one call - afterEach's own `server.close()` still
+        // closes the real server normally afterward.
+        vi.spyOn((server as any).server, "close").mockImplementationOnce((cb: (err?: Error) => void) => cb(closeError));
+
+        await expect(server.close()).rejects.toThrow("boom");
     });
 
     it("Processes multiple sequential requests on the same connection.", async () => {
