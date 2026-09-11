@@ -18,7 +18,7 @@ spec:
     spec:
       containers:
         - name: postfix-bridge
-          image: {{ $.Values.service.image.registry }}/{{ $.Values.service.image.repository }}:{{ $.Values.mtaBridge.image.tag | default $.Chart.AppVersion }}
+          image: {{ $.Values.service.image.registry }}/{{ $.Values.service.image.repository }}:{{ $.Values.service.image.tag | default $.Chart.AppVersion }}
           {{- if eq ($.Values.service.image.tag | default $.Chart.AppVersion) "latest" }}
           imagePullPolicy: Always
           {{- else }}
