@@ -55,3 +55,46 @@ Keep entries terse — this is a reference, not a transcript.
   repo needs, not deciding a sibling repo's own release number.
 
 ## Session Log
+
+### 2026-09-11 — 100% coverage, real CONTRIBUTING.md
+
+`src/index.ts` (the actual startup wiring - env parsing, which lookup goes to which server,
+listen/shutdown sequencing) had 0% coverage; the other three files (`MtaIngestClient.ts`,
+`SmtpDeliveryServer.ts`, `TcpTableServer.ts`) already had real-socket tests but a handful of
+uncovered branches. Brought the whole package to 100% statements/branches/functions/lines and
+pinned that via a new `thresholds` block in `vitest.config.ts` (there wasn't one before).
+
+- **`test/index.test.ts` mocks all three collaborator classes** (`MtaIngestClient`,
+  `TcpTableServer`, `SmtpDeliveryServer`) rather than opening real sockets/HTTP - those classes
+  already have their own real-I/O tests; this file's only job is the wiring itself (env var
+  parsing/defaults, which lookup callback goes to which server, startup failure → `process.exit(1)`,
+  SIGINT/SIGTERM → close-everything → `process.exit(0)`). Same `vi.resetModules()` + fresh
+  `import()` per test pattern as `electron-client`'s `src/main/index.ts` tests, since this file
+  also throws synchronously at import time (`requireEnv("MTA_INGEST_SECRET")`) and has import-time
+  side effects (`process.on(...)`, `void start().catch(...)`).
+  - `process.on`/`console.log`/`console.error`/`process.exit` are all spied on, and
+    `process.removeAllListeners("SIGINT"/"SIGTERM")` runs in `afterEach` - otherwise every test's
+    fresh `import()` re-registers two more real listeners on the actual `process` object for the
+    life of the test file.
+- **A few branch/function gaps needed the class's own private methods invoked directly** rather
+  than driven through real socket/SMTP I/O, where the real trigger condition is impractical to
+  force deterministically over a real socket:
+  - `TcpTableServer.handleLine()`'s `if (socket.destroyed) return` guard - tested by calling
+    `handleLine` directly with a fake `{ destroyed: true }` socket.
+  - `TcpTableServer`'s `socket.on("error", () => {})` handler - tested by adding a second
+    `"connection"` listener on the real underlying `net.Server` (harmless alongside
+    `net.createServer`'s own callback-as-listener) that synthetically emits `socket.emit("error",
+    ...)` on the real accepted socket, rather than racing a genuine abrupt disconnect.
+  - `SmtpDeliveryServer.handleData()`'s null-reverse-path branch (`session.envelope.mailFrom ?
+    ... : ""`) and its `stream.on("error", ...)` handler - tested by calling the private
+    `handleData()` directly with a fake `EventEmitter` stream and a hand-built `session` object,
+    since nodemailer's own wire behavior for `MAIL FROM:<>` isn't something worth depending on to
+    hit this branch reliably.
+  - `TcpTableServer.close()`'s reject branch - `vi.spyOn` the real underlying `net.Server`'s own
+    `close()` with `mockImplementationOnce` to inject one synthetic error, leaving the real
+    `afterEach` cleanup close() unaffected.
+- Fixed `CONTRIBUTING.md`'s bug-report/feature-request examples, which were the generic
+  RapidMX template's `@rapidrest`/admin-console-flavored ones (copy-pasted from `server`/`restapi`,
+  not this bridge) - replaced with a `tcp_table`/Postfix-relevant example and Project Info fields
+  (bridge version, RapidMX server version, Postfix version).
+- Not committed - JP said "hold off on commit" for this whole cross-repo pass.
