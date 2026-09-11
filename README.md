@@ -1,4 +1,4 @@
-# RapidMX: MTA Bridge
+# RapidMX: Postfix Bridge
 
 [![CI](https://github.com/rapidmx/postfix-bridge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rapidmx/postfix-bridge/actions/workflows/ci.yml)
 
