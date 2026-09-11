@@ -6,7 +6,7 @@ kind: Service
 metadata:
   name: postfix
 spec:
-  type: {{ $.Values.mail.postfix.serviceType }}
+  type: {{ $.Values.postfix.serviceType }}
   ports:
     - port: 25
       targetPort: 25

@@ -8,13 +8,13 @@ metadata:
   name: {{ include "rrst.fullname" . }}-dkim-keys
 spec:
   accessModes:
-    - {{ .Values.mail.dkim.storage.accessMode }}
-  {{- if ne .Values.mail.dkim.storage.storageClassName "default" }}
-  storageClassName: {{ tpl .Values.mail.dkim.storage.storageClassName . | quote }}
+    - {{ .Values.dkim.storage.accessMode }}
+  {{- if ne .Values.dkim.storage.storageClassName "default" }}
+  storageClassName: {{ tpl .Values.dkim.storage.storageClassName . | quote }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.mail.dkim.storage.size }}
+      storage: {{ .Values.dkim.storage.size }}
 ---
 # To supply your own DKIM key pair for a domain instead of relying on the RapidMX server's own
 # FsDkimKeyProvider/DKIM_AUTOGENERATE (recommended for production): drop the standard opendkim-genkey
@@ -29,8 +29,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  {{- if ne .Values.mail.dkim.storage.storageClassName "default" }}
-  storageClassName: {{ tpl .Values.mail.dkim.storage.storageClassName . | quote }}
+  {{- if ne .Values.dkim.storage.storageClassName "default" }}
+  storageClassName: {{ tpl .Values.dkim.storage.storageClassName . | quote }}
   {{- end }}
   resources:
     requests:

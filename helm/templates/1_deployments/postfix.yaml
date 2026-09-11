@@ -28,18 +28,18 @@ spec:
     spec:
       containers:
         - name: postfix
-          image: {{ $.Values.mail.postfix.image.registry }}/{{ $.Values.mail.postfix.image.repository }}:{{ $.Values.mail.postfix.image.tag }}
+          image: {{ $.Values.postfix.image.registry }}/{{ $.Values.postfix.image.repository }}:{{ $.Values.postfix.image.tag }}
           env:
             # Comma-separated domains this Postfix instance accepts/relays OUTBOUND submissions for -
             # keep in sync with the Domains added via the admin console. Independent of INBOUND
             # acceptance, which postfix-bridge backs dynamically from this app's own Domain database.
             - name: ALLOWED_SENDER_DOMAINS
-              value: {{ $.Values.mail.domains | quote }}
+              value: {{ $.Values.domains | quote }}
             # Postfix's own SMTP identity (HELO/EHLO name, Received headers) - deliberately kept in sync
             # with the TLS certificate's CN below (both driven by mail.hostname). A HELO name that doesn't
             # match the presented certificate is a common deliverability red flag with receiving providers.
             - name: POSTFIX_myhostname
-              value: {{ $.Values.mail.hostname | quote }}
+              value: {{ $.Values.hostname | quote }}
             # rspamd (this image's bundled DKIM backend since v6, distinct from the standalone rspamd
             # Deployment used only for spam scoring - see rspamd.yaml) signs outbound mail using whatever
             # key file it finds at /var/lib/rspamd/dkim/<domain>.<selector>.key. In this deployment that
@@ -49,9 +49,9 @@ spec:
             # is opened). DKIM_AUTOGENERATE is kept as a fallback safety net for a domain added here
             # without a corresponding Domain record.
             - name: DKIM_AUTOGENERATE
-              value: {{ $.Values.mail.dkim.autogenerate | quote }}
+              value: {{ $.Values.dkim.autogenerate | quote }}
             - name: DKIM_SELECTOR
-              value: {{ $.Values.mail.dkim.selector | quote }}
+              value: {{ $.Values.dkim.selector | quote }}
             # Inbound recipient/domain acceptance - both back this deployment's own Domain/mailbox
             # database dynamically via the postfix-bridge Service's tcp_table listeners, so a domain/mailbox
             # added through the admin console is accepted here with no Postfix restart needed. Final
@@ -84,7 +84,7 @@ spec:
           ports:
             - containerPort: 25
           resources:
-            {{- toYaml $.Values.mail.postfix.resources | nindent 12 }}
+            {{- toYaml $.Values.postfix.resources | nindent 12 }}
           volumeMounts:
             # rspamd's own live signing directory - the other end of the main service Deployment's own
             # mount of this same PVC.

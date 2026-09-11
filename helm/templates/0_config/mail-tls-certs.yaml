@@ -4,7 +4,7 @@
 # real-cert-manager-Certificate-vs-self-signed-fallback split for the HTTP Gateway, except Postfix always
 # needs a cert file to exist (it can't just skip TLS the way the Gateway skips it for a plain-HTTP dev
 # listener), so the fallback branch here generates a real (self-signed) Secret instead of doing nothing.
-{{- if and (ne $.Values.mail.hostname "localhost") (not (contains ".local" $.Values.mail.hostname)) }}
+{{- if and (ne $.Values.hostname "localhost") (not (contains ".local" $.Values.hostname)) }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -18,7 +18,7 @@ spec:
   subject:
     organizations:
       - RapidMX
-  commonName: {{ $.Values.mail.hostname }}
+  commonName: {{ $.Values.hostname }}
   isCA: false
   privateKey:
     algorithm: ECDSA
@@ -28,7 +28,7 @@ spec:
     - server auth
     - client auth
   dnsNames:
-  - {{ $.Values.mail.hostname }}
+  - {{ $.Values.hostname }}
   issuerRef:
     name: letsencrypt-prod
     kind: ClusterIssuer
@@ -45,7 +45,7 @@ metadata:
   namespace: {{ $.Release.Namespace }}
 type: kubernetes.io/tls
 data:
-  {{- $cert := genSelfSignedCert $.Values.mail.hostname nil (list $.Values.mail.hostname) 365 }}
+  {{- $cert := genSelfSignedCert $.Values.hostname nil (list $.Values.hostname) 365 }}
   tls.crt: {{ $cert.Cert | b64enc }}
   tls.key: {{ $cert.Key | b64enc }}
 {{- end }}
