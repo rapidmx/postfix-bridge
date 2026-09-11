@@ -1,9 +1,10 @@
 apiVersion: v2
 description: >-
-  Bridges Postfix's tcp_table lookup and SMTP protocols to a RapidMX server's /internal/mta
-  ingest contract - deploys postfix-bridge alongside its own Postfix instance. Deploy this chart
-  next to (not instead of) the RapidMX server's own Helm chart, which owns the server itself,
-  auth-server, datastores, and spam/AV scanning.
+  Bridges Postfix's tcp_table lookup and SMTP protocols to a RapidMX server's
+  /internal/mta ingest contract - deploys postfix-bridge alongside its own
+  Postfix instance. Deploy this chart next to (not instead of) the RapidMX
+  server's own Helm chart, which owns the server itself, auth-server,
+  datastores, and spam/AV scanning.
 name: postfix-bridge
 version: 0.1.0
-appVersion: 0.1.0
+appVersion: 1.0.0

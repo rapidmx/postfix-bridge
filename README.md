@@ -34,7 +34,7 @@ yarn start
 | ------------ | :----------------------: |
 | Registry     | ghcr.io                  |
 | Repository   | /rapidmx/postfix-bridge      |
-| Tag          | 0.1.0                    |
+| Tag          | 1.0.0                    |
 
 ### Docker Compose
 
@@ -79,7 +79,7 @@ RapidMX server's own Helm chart (which owns the server, auth-server, datastores,
 not instead of it.
 
 ```bash
-helm install --create-namespace --namespace mail-server postfix-bridge oci://ghcr.io/rapidmx/charts/postfix-bridge --version 0.1.0
+helm install --create-namespace --namespace mail-server postfix-bridge oci://ghcr.io/rapidmx/charts/postfix-bridge --version 1.0.0
 ```
 
 Or from a local checkout:

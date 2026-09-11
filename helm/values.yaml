@@ -1,12 +1,6 @@
 common:
   storageClass: default
-# Bearer secret authenticating postfix-bridge's calls to the RapidMX server's /internal/mta routes. Must be
-# set to the exact same value as that chart's own mail__transport__ingest__secret - the two charts are
-# separate Helm releases, so nothing keeps them in sync automatically.
 ingestSecret: ChangeMeIngestSecret
-# Base URL of the RapidMX server's /internal/mta contract this bridge forwards to - point this at
-# wherever that chart's release actually resolves from within the cluster (e.g.
-# http://<server-release>-services.<namespace>.svc.cluster.local/internal/mta).
 ingestBaseUrl: http://server-services/internal/mta
 domains: example.com
 hostname: mail.localhost
@@ -33,7 +27,7 @@ service:
   image:
     registry: ghcr.io
     repository: rapidmx/postfix-bridge
-    tag: 0.1.0
+    tag: 1.0.0
   resources:
     requests:
       cpu: 50m

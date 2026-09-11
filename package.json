@@ -1,6 +1,6 @@
 {
   "name": "postfix-bridge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Provides a bridge between Postfix and the RapidMX server.",
   "type": "module",
   "repository": "https://github.com/rapidmx/postfix-bridge",
