@@ -1,0 +1,43 @@
+---
+# Translates Postfix's own protocols (tcp_table lookups, plain SMTP) into calls against the RapidMX
+# server's /internal/mta contract - see src/index.ts's own doc comment, and postfix.yaml for
+# how Postfix is pointed at it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postfix-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postfix-bridge
+  template:
+    metadata:
+      labels:
+        app: postfix-bridge
+    spec:
+      containers:
+        - name: postfix-bridge
+          image: {{ $.Values.mail.mtaBridge.image.registry }}/{{ $.Values.mail.mtaBridge.image.repository }}:{{ $.Values.mail.mtaBridge.image.tag | default $.Chart.AppVersion }}
+          {{- if eq ($.Values.mail.mtaBridge.image.tag | default $.Chart.AppVersion) "latest" }}
+          imagePullPolicy: Always
+          {{- else }}
+          imagePullPolicy: IfNotPresent
+          {{- end }}
+          env:
+            - name: MTA_INGEST_BASE_URL
+              value: {{ tpl $.Values.mail.ingestBaseUrl $ | quote }}
+            # mail-ingest-secret.yaml stores this under this bridge's own plain env var name (see
+            # src/index.ts) - the RapidMX server's own chart is a separate release and must be
+            # configured with the identical secret value under its own mail__transport__ingest__secret key.
+            - name: MTA_INGEST_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rrst.fullname" . }}-mail-ingest-secret
+                  key: MTA_INGEST_SECRET
+          ports:
+            - containerPort: 10040
+            - containerPort: 10041
+            - containerPort: 2525
+          resources:
+            {{- toYaml $.Values.mail.mtaBridge.resources | nindent 12 }}

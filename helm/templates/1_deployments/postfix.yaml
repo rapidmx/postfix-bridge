@@ -1,0 +1,118 @@
+---
+# The MTA - see docker-compose.yml for the equivalent docker-compose wiring this mirrors, including
+# the DKIM/DMARC and inbound-routing design notes repeated there. INBOUND recipient/domain acceptance and
+# final delivery route through the postfix-bridge Service below (relay_domains/relay_recipient_maps/
+# transport_maps), which translates Postfix's own tcp_table/SMTP protocols into calls against the main
+# service's /internal/mta contract - see src/index.ts's own doc comment. OUTBOUND mail from the
+# main service Deployment reaches this container over plain SMTP on port 25 (see that Deployment's own
+# SENDMAIL_RELAY_HOST env var, defaulting to the "postfix" Service name this file also creates).
+#
+# TLS: both of Postfix's *internet-facing* directions - inbound smtpd on 25 and outbound smtp client - are
+# mandatory TLS ("encrypt" security level, not the image's opportunistic "may" default), backed by the
+# mail-tls-certs.yaml Secret. The two hops that stay plaintext on purpose are internal to the cluster
+# network (main service Deployment -> here, and here -> postfix-bridge via smtp_tls_policy_maps) - see
+# mail-tls-policy.yaml for why postfix-bridge specifically is exempted.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postfix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postfix
+  template:
+    metadata:
+      labels:
+        app: postfix
+    spec:
+      containers:
+        - name: postfix
+          image: {{ $.Values.mail.postfix.image.registry }}/{{ $.Values.mail.postfix.image.repository }}:{{ $.Values.mail.postfix.image.tag }}
+          env:
+            # Comma-separated domains this Postfix instance accepts/relays OUTBOUND submissions for -
+            # keep in sync with the Domains added via the admin console. Independent of INBOUND
+            # acceptance, which postfix-bridge backs dynamically from this app's own Domain database.
+            - name: ALLOWED_SENDER_DOMAINS
+              value: {{ $.Values.mail.domains | quote }}
+            # Postfix's own SMTP identity (HELO/EHLO name, Received headers) - deliberately kept in sync
+            # with the TLS certificate's CN below (both driven by mail.hostname). A HELO name that doesn't
+            # match the presented certificate is a common deliverability red flag with receiving providers.
+            - name: POSTFIX_myhostname
+              value: {{ $.Values.mail.hostname | quote }}
+            # rspamd (this image's bundled DKIM backend since v6, distinct from the standalone rspamd
+            # Deployment used only for spam scoring - see rspamd.yaml) signs outbound mail using whatever
+            # key file it finds at /var/lib/rspamd/dkim/<domain>.<selector>.key. In this deployment that
+            # file is normally already there by the time a domain is added to ALLOWED_SENDER_DOMAINS
+            # above - the main service Deployment's own FsDkimKeyProvider writes it the moment a Domain is
+            # created (or, for one added before that provider existed, the first time its DNS-setup page
+            # is opened). DKIM_AUTOGENERATE is kept as a fallback safety net for a domain added here
+            # without a corresponding Domain record.
+            - name: DKIM_AUTOGENERATE
+              value: {{ $.Values.mail.dkim.autogenerate | quote }}
+            - name: DKIM_SELECTOR
+              value: {{ $.Values.mail.dkim.selector | quote }}
+            # Inbound recipient/domain acceptance - both back this deployment's own Domain/mailbox
+            # database dynamically via the postfix-bridge Service's tcp_table listeners, so a domain/mailbox
+            # added through the admin console is accepted here with no Postfix restart needed. Final
+            # delivery of anything accepted goes out over plain SMTP to postfix-bridge's own delivery
+            # listener, which hands it to POST /internal/mta/deliver.
+            - name: POSTFIX_relay_domains
+              value: tcp:postfix-bridge:10040
+            - name: POSTFIX_relay_recipient_maps
+              value: tcp:postfix-bridge:10041
+            - name: POSTFIX_transport_maps
+              value: static:smtp:postfix-bridge:2525
+            # Mandatory TLS, both directions - see this file's own top-of-file comment for why "encrypt"
+            # (not the image's opportunistic "may" default) is deliberate here.
+            - name: POSTFIX_smtpd_tls_security_level
+              value: encrypt
+            - name: POSTFIX_smtpd_tls_cert_file
+              value: /etc/postfix/tls/tls.crt
+            - name: POSTFIX_smtpd_tls_key_file
+              value: /etc/postfix/tls/tls.key
+            - name: POSTFIX_smtp_tls_security_level
+              value: encrypt
+            - name: POSTFIX_smtp_tls_cert_file
+              value: /etc/postfix/tls/tls.crt
+            - name: POSTFIX_smtp_tls_key_file
+              value: /etc/postfix/tls/tls.key
+            # Carves out the one destination that's actually internal (postfix-bridge) from the mandatory
+            # outbound TLS default above - see mail-tls-policy.yaml for the full explanation.
+            - name: POSTFIX_smtp_tls_policy_maps
+              value: texthash:/etc/postfix/tls_policy.txt
+          ports:
+            - containerPort: 25
+          resources:
+            {{- toYaml $.Values.mail.postfix.resources | nindent 12 }}
+          volumeMounts:
+            # rspamd's own live signing directory - the other end of the main service Deployment's own
+            # mount of this same PVC.
+            - name: dkim-keys
+              mountPath: /var/lib/rspamd/dkim
+            # To supply your own DKIM key pair for a domain instead of relying on
+            # FsDkimKeyProvider/DKIM_AUTOGENERATE: exec into this pod and drop the standard
+            # opendkim-genkey output under /etc/opendkim/keys/<domain>/ - see mail-storage.yaml's own
+            # doc comment. The image's own startup script imports it into dkim-keys above on next restart.
+            - name: dkim-opendkim-keys
+              mountPath: /etc/opendkim/keys
+            - name: mail-tls
+              mountPath: /etc/postfix/tls
+              readOnly: true
+            - name: mail-tls-policy
+              mountPath: /etc/postfix/tls_policy.txt
+              subPath: tls_policy.txt
+              readOnly: true
+      volumes:
+        - name: dkim-keys
+          persistentVolumeClaim:
+            claimName: {{ include "rrst.fullname" . }}-dkim-keys
+        - name: dkim-opendkim-keys
+          persistentVolumeClaim:
+            claimName: {{ include "rrst.fullname" . }}-dkim-opendkim-keys
+        - name: mail-tls
+          secret:
+            secretName: {{ include "rrst.fullname" . }}-mail-tls-cert
+        - name: mail-tls-policy
+          configMap:
+            name: {{ include "rrst.fullname" . }}-mail-tls-policy

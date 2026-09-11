@@ -1,0 +1,8 @@
+postfix-bridge and its Postfix instance have been deployed.
+
+This chart deploys postfix-bridge alongside its own Postfix - it does not include the RapidMX server
+itself. Make sure:
+  - mail.ingestBaseUrl points at that server's own release (its "-services" Service), and
+  - mail.ingestSecret matches that release's mail__transport__ingest__secret exactly
+
+or postfix-bridge's calls to /internal/mta will fail authorization.

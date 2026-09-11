@@ -1,0 +1,37 @@
+---
+# See values.yaml's mail.dkim.storage doc comment. Shared read-write with the RapidMX server's own
+# Deployment (FsDkimKeyProvider writes) - since that's a separate Helm release now, point both charts at
+# the same underlying storage (e.g. an existing PVC/NFS-backed volume) if they need to actually share it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rrst.fullname" . }}-dkim-keys
+spec:
+  accessModes:
+    - {{ .Values.mail.dkim.storage.accessMode }}
+  {{- if ne .Values.mail.dkim.storage.storageClassName "default" }}
+  storageClassName: {{ tpl .Values.mail.dkim.storage.storageClassName . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.mail.dkim.storage.size }}
+---
+# To supply your own DKIM key pair for a domain instead of relying on the RapidMX server's own
+# FsDkimKeyProvider/DKIM_AUTOGENERATE (recommended for production): drop the standard opendkim-genkey
+# output - <domain>/<selector>.private (PEM RSA private key) and <domain>/<selector>.txt (the DNS TXT record
+# text) - into this volume under /etc/opendkim/keys/<domain>/ (mounted only by the postfix Deployment);
+# this image's own startup script imports it into rspamd's native format (the dkim-keys PVC above) on
+# container start. Only ever mounted by one Deployment, so always ReadWriteOnce regardless of topology.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rrst.fullname" . }}-dkim-opendkim-keys
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if ne .Values.mail.dkim.storage.storageClassName "default" }}
+  storageClassName: {{ tpl .Values.mail.dkim.storage.storageClassName . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: 256Mi

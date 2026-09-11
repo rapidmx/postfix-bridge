@@ -1,0 +1,117 @@
+services:
+    # Translates Postfix's own protocols (tcp_table lookups, plain SMTP) into calls against the RapidMX
+    # server's `/internal/mta` contract - see src/index.ts's own doc comment, and the `postfix` service
+    # below for how Postfix is pointed at it (relay_domains/relay_recipient_maps/transport_maps).
+    postfix-bridge:
+        image: rapidmx-postfix-bridge:local
+        build:
+            context: .
+        healthcheck:
+            disable: true
+        environment:
+            # This stack does not run its own RapidMX server - point it at wherever that's actually
+            # running. `host.docker.internal` reaches a server published on the host's own localhost:3000
+            # (e.g. the main rapidmx/server repo's own `docker compose ... up`, run separately); override
+            # with a real internal URL for anything beyond local, single-host evaluation.
+            - MTA_INGEST_BASE_URL=${MTA_INGEST_BASE_URL:-http://host.docker.internal:3000/internal/mta}
+            - MTA_INGEST_SECRET=${MTA_INGEST_SECRET:-ChangeMeIngestSecret}
+        depends_on:
+            postfix-tls-init:
+                condition: service_completed_successfully
+    # Generates a self-signed TLS certificate for Postfix's own public MX hostname (MAIL_HOSTNAME) into the
+    # shared `postfix_tls` volume, if one isn't already there - see the `postfix` service below for how
+    # it's consumed. This is a bootstrap default only, so the stack has working TLS with zero setup: for a
+    # real deployment, drop a real certificate (e.g. Let's Encrypt) covering this deployment's actual public
+    # MX hostname into the same volume at the same two filenames - anything already present at container
+    # start is left untouched, so a real cert is never overwritten.
+    postfix-tls-init:
+        image: alpine:3.20
+        volumes:
+            - postfix_tls:/tls
+        entrypoint: ["/bin/sh", "-c"]
+        command:
+            - |
+                set -e
+                if [ ! -f /tls/tls.crt ] || [ ! -f /tls/tls.key ]; then
+                    apk add --no-cache openssl >/dev/null
+                    openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
+                        -subj "/CN=${MAIL_HOSTNAME:-mail.example.com}" \
+                        -keyout /tls/tls.key -out /tls/tls.crt
+                    chmod 600 /tls/tls.key
+                fi
+    # The MTA - real inbound/outbound SMTP is intentionally out of scope for the RapidMX server itself; this
+    # is the "dedicated MTA" it hands off to. INBOUND delivery routes through the `postfix-bridge` service above
+    # (recipient/domain validation via Postfix's own `tcp_table` lookup protocol, final delivery via plain
+    # SMTP), which translates both into calls against the server's `GET /internal/mta/domain`/
+    # `GET /internal/mta/resolve`/`POST /internal/mta/deliver` contract. OUTBOUND mail from the RapidMX
+    # server reaches this container over plain SMTP on port 25 (that repo's own SENDMAIL_RELAY_HOST).
+    #
+    # TLS: both of Postfix's *internet-facing* directions - inbound smtpd on 25 and outbound smtp client -
+    # are configured below with `_tls_security_level=encrypt`, i.e. mandatory TLS, not opportunistic. That's
+    # deliberate: nothing should arrive from or leave to another mail server in the clear. The trade-off is
+    # real, though - any sender/receiver that genuinely can't do TLS will bounce instead of being accepted/
+    # delivered in the clear. The hop that stays plaintext on purpose is internal to this compose network
+    # (postfix -> postfix-bridge, via smtp_tls_policy_maps) - see docker/postfix/tls_policy.txt for why
+    # postfix-bridge specifically is exempted. DKIM signing (rspamd, bundled in this image) and spam/AV scanning
+    # are the RapidMX server's own concern, not this bridge's - see that repo's own compose/Helm chart.
+    postfix:
+        image: boky/postfix:latest
+        depends_on:
+            postfix-tls-init:
+                condition: service_completed_successfully
+        environment:
+            # Comma-separated list of domains this Postfix instance will accept/relay outbound mail for.
+            # Keep this in sync with the Domains added via the RapidMX server's admin console - Postfix
+            # itself has no visibility into that database. (Inbound *acceptance* of a domain is governed
+            # dynamically by relay_domains/postfix-bridge below and does NOT depend on this list; this list is
+            # purely the anti-spoofing check on OUTBOUND submission - see boky/postfix's own README.)
+            - ALLOWED_SENDER_DOMAINS=${MAIL_DOMAINS:-example.com}
+            # Postfix's own SMTP identity (HELO/EHLO name, Received headers) - deliberately kept in sync
+            # with the TLS certificate's CN above (both driven by MAIL_HOSTNAME). A HELO name that doesn't
+            # match the presented certificate is a common deliverability red flag with receiving providers.
+            - POSTFIX_myhostname=${MAIL_HOSTNAME:-mail.example.com}
+            # Inbound recipient/domain acceptance - both back the RapidMX server's own Domain/mailbox
+            # database dynamically via the `postfix-bridge` service's `tcp_table` listeners, so a domain/mailbox
+            # added through the admin console is accepted here with no Postfix restart needed. Final
+            # delivery of anything accepted goes out over plain SMTP to postfix-bridge's own delivery listener,
+            # which hands it to `POST /internal/mta/deliver`.
+            - POSTFIX_relay_domains=tcp:postfix-bridge:10040
+            - POSTFIX_relay_recipient_maps=tcp:postfix-bridge:10041
+            - POSTFIX_transport_maps=static:smtp:postfix-bridge:2525
+            # Mandatory TLS, both directions - see this service's own comment above for why "encrypt" (not
+            # the image's opportunistic "may" default) is deliberate here.
+            - POSTFIX_smtpd_tls_security_level=encrypt
+            - POSTFIX_smtpd_tls_cert_file=/etc/postfix/tls/tls.crt
+            - POSTFIX_smtpd_tls_key_file=/etc/postfix/tls/tls.key
+            - POSTFIX_smtp_tls_security_level=encrypt
+            - POSTFIX_smtp_tls_cert_file=/etc/postfix/tls/tls.crt
+            - POSTFIX_smtp_tls_key_file=/etc/postfix/tls/tls.key
+            # Carves out the one destination that's actually internal (postfix-bridge) from the mandatory
+            # outbound TLS default above - see docker/postfix/tls_policy.txt for the full explanation.
+            - POSTFIX_smtp_tls_policy_maps=texthash:/etc/postfix/tls_policy.txt
+            # rspamd (the image's bundled DKIM backend since v6) signs outbound mail using whatever key file
+            # it finds at /var/lib/rspamd/dkim/<domain>.<selector>.key - the RapidMX server's own
+            # FsDkimKeyProvider writes it there (see that repo's compose file for how it shares this volume).
+            # Kept as a fallback safety net for a domain added here without a corresponding Domain record.
+            - DKIM_AUTOGENERATE=${DKIM_AUTOGENERATE:-1}
+            - DKIM_SELECTOR=${DKIM_SELECTOR:-mail}
+        volumes:
+            # To supply your own DKIM key pair for a domain instead of relying on the RapidMX server's own
+            # FsDkimKeyProvider or the DKIM_AUTOGENERATE fallback above: drop the standard opendkim-genkey
+            # output - <domain>/<selector>.private (PEM RSA private key) and <domain>/<selector>.txt (the
+            # DNS TXT record text) - into this volume under /etc/opendkim/keys/<domain>/; this image's own
+            # startup script imports it into rspamd's native format on container start.
+            - dkim_opendkim_keys:/etc/opendkim/keys
+            # rspamd's own live signing directory. Share this same volume with the RapidMX server's own
+            # compose stack (e.g. an external volume) so FsDkimKeyProvider's writes land here too.
+            - dkim_rspamd_keys:/var/lib/rspamd/dkim
+            # See the `postfix-tls-init` service above for how this gets populated.
+            - postfix_tls:/etc/postfix/tls:ro
+            - ./docker/postfix/tls_policy.txt:/etc/postfix/tls_policy.txt:ro
+        ports:
+            - "25:25"
+
+volumes:
+    dkim_opendkim_keys:
+    dkim_rspamd_keys:
+    postfix_tls:

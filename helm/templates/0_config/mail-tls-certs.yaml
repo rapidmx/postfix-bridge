@@ -1,0 +1,51 @@
+# TLS certificate for Postfix's own public MX hostname (mail.hostname) - consumed by postfix.yaml's
+# smtpd_tls_cert_file/smtp_tls_cert_file, which enforce mandatory TLS (not the image's opportunistic "may"
+# default) on both of Postfix's internet-facing directions. Mirrors tls-certs.yaml's identical
+# real-cert-manager-Certificate-vs-self-signed-fallback split for the HTTP Gateway, except Postfix always
+# needs a cert file to exist (it can't just skip TLS the way the Gateway skips it for a plain-HTTP dev
+# listener), so the fallback branch here generates a real (self-signed) Secret instead of doing nothing.
+{{- if and (ne $.Values.mail.hostname "localhost") (not (contains ".local" $.Values.mail.hostname)) }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "rrst.fullname" . }}-mail-tls
+  namespace: {{ $.Release.Namespace }}
+spec:
+  secretName: {{ include "rrst.fullname" . }}-mail-tls-cert
+  duration: 2160h # 90d
+  renewBefore: 360h # 15d
+  subject:
+    organizations:
+      - RapidMX
+  commonName: {{ $.Values.mail.hostname }}
+  isCA: false
+  privateKey:
+    algorithm: ECDSA
+    encoding: PKCS1
+    size: 384
+  usages:
+    - server auth
+    - client auth
+  dnsNames:
+  - {{ $.Values.mail.hostname }}
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+{{- else }}
+---
+# No cert-manager Issuer can obtain a real certificate for a `.local`/localhost placeholder hostname - this
+# self-signed fallback keeps `docker compose`-style "just works" local evaluation working the same way
+# docker-compose.yml's own `postfix-tls-init` bootstrap cert does. Replace mail.hostname with a real
+# publicly resolvable MX hostname to switch this to a real cert-manager-issued Certificate above.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "rrst.fullname" . }}-mail-tls-cert
+  namespace: {{ $.Release.Namespace }}
+type: kubernetes.io/tls
+data:
+  {{- $cert := genSelfSignedCert $.Values.mail.hostname nil (list $.Values.mail.hostname) 365 }}
+  tls.crt: {{ $cert.Cert | b64enc }}
+  tls.key: {{ $cert.Key | b64enc }}
+{{- end }}

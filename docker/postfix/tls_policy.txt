@@ -1,0 +1,14 @@
+# Postfix smtp_tls_policy_maps (texthash) override — see docker-compose.yml's `postfix` service for
+# how this is wired in (POSTFIX_smtp_tls_policy_maps=texthash:/etc/postfix/tls_policy.txt) and the
+# `helm/templates/0_config/mail-tls-policy.yaml` ConfigMap for the Kubernetes equivalent.
+#
+# The deployment-wide default (POSTFIX_smtp_tls_security_level=encrypt) makes TLS mandatory for every
+# OUTBOUND delivery — required so nothing leaves this deployment over an internet link in the clear. The
+# one destination that's actually internal, not internet-facing, is postfix-bridge's own delivery listener
+# (see src/SmtpDeliveryServer.ts) — it has no TLS/STARTTLS support at all by design, since it's
+# reachable only from this Postfix container over the compose/cluster-internal network. Without this
+# override, the global "encrypt" default would make Postfix refuse to hand accepted mail to postfix-bridge at
+# all. Both forms of the lookup key are listed since Postfix tries the full "host:port" form first and
+# falls back to just "host".
+postfix-bridge:2525    none
+postfix-bridge         none

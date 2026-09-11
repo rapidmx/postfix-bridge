@@ -1,0 +1,35 @@
+---
+# Real inbound SMTP needs to be reachable from the public internet - see values.yaml's
+# mail.postfix.serviceType doc comment for LoadBalancer vs NodePort.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postfix
+spec:
+  type: {{ $.Values.mail.postfix.serviceType }}
+  ports:
+    - port: 25
+      targetPort: 25
+      name: smtp
+  selector:
+    app: postfix
+---
+# Internal only - reachable solely from the postfix Deployment (tcp_table lookups on 10040/10041, plain
+# SMTP delivery hand-off on 2525). Never expose this outside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postfix-bridge
+spec:
+  ports:
+    - port: 10040
+      targetPort: 10040
+      name: domain-lookup
+    - port: 10041
+      targetPort: 10041
+      name: recipient-lookup
+    - port: 2525
+      targetPort: 2525
+      name: smtp-delivery
+  selector:
+    app: postfix-bridge
