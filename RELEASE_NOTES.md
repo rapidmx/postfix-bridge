@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## v1.1.0
 
 Helm chart changes, so the RapidMX server's chart can bundle this one (as its `postfixBridge` dependency).
 

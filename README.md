@@ -34,7 +34,7 @@ yarn start
 | ------------ | :----------------------: |
 | Registry     | ghcr.io                  |
 | Repository   | /rapidmx/postfix-bridge      |
-| Tag          | 1.0.0                    |
+| Tag          | 1.1.0                    |
 
 ### Docker Compose
 
@@ -79,7 +79,7 @@ it as its `postfixBridge` dependency and wires it up, so you only need to instal
 runs with `postfixBridge.create=false`.
 
 ```bash
-helm install --create-namespace --namespace mail-server postfix-bridge oci://ghcr.io/rapidmx/charts/postfix-bridge --version 1.0.0
+helm install --create-namespace --namespace mail-server postfix-bridge oci://ghcr.io/rapidmx/charts/postfix-bridge --version 1.1.0
 ```
 
 Or from a local checkout:
