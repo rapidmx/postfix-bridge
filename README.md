@@ -74,9 +74,9 @@ to the compose network and has no TLS support of its own by design.
 
 ### Kubernetes
 
-A Helm chart is included that deploys this bridge and its own Postfix instance - deploy it alongside the
-RapidMX server's own Helm chart (which owns the server, auth-server, datastores, and spam/AV scanning),
-not instead of it.
+A Helm chart is included that deploys this bridge and its own Postfix instance. The RapidMX server's Helm chart bundles
+it as its `postfixBridge` dependency and wires it up, so you only need to install this chart on its own when the server
+runs with `postfixBridge.create=false`.
 
 ```bash
 helm install --create-namespace --namespace mail-server postfix-bridge oci://ghcr.io/rapidmx/charts/postfix-bridge --version 1.0.0
@@ -88,9 +88,17 @@ Or from a local checkout:
 helm install --create-namespace --namespace mail-server postfix-bridge ./helm
 ```
 
-Set `mail.ingestBaseUrl` to the RapidMX server release's own Service URL, and `mail.ingestSecret` to the
-exact same value as that release's `mail__transport__ingest__secret` - the two are separate Helm releases,
-so nothing keeps them in sync automatically. See `helm/values.yaml` for the full set of configurable values.
+Installed on its own, set:
+
+- `ingestSecret` (required) to the exact same value as the server release's `mail.ingestSecret`, and `ingestBaseUrl` to
+  that release's Service (`http://<release>-services/internal/mta`) - nothing keeps separate releases in sync;
+- `hostname` to Postfix's public MX host name and `domains` to the domains it sends mail for;
+- `dkim.storage.existingClaim` to the server's DKIM keys claim (`<release>-dkim-keys`), so Postfix signs with the keys
+  the server publishes in DNS;
+- `tls.existingSecret` to use your own certificate, or `tls.certManager.enabled=false` to self-sign one for a public
+  hostname when cert-manager (with the `letsencrypt-prod` ClusterIssuer, `tls.certManager.issuerName`) isn't available.
+
+See `helm/values.yaml` for the full set of configurable values.
 
 ## Debugging
 

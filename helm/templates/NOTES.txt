@@ -1,8 +1,15 @@
 postfix-bridge and its Postfix instance have been deployed.
 
-This chart deploys postfix-bridge alongside its own Postfix - it does not include the RapidMX server
-itself. Make sure:
-  - mail.ingestBaseUrl points at that server's own release (its "-services" Service), and
-  - mail.ingestSecret matches that release's mail__transport__ingest__secret exactly
+Postfix listens on port 25 of the "postfix" Service ({{ .Values.postfix.serviceType }}) as {{ include "postfixBridge.hostname" . }} and sends mail for
+{{ tpl (.Values.domains | toString) . }}. It receives mail for the RapidMX server's domains once their MX records point at it.
 
+This chart doesn't include the RapidMX server itself (its own chart bundles this one). Make sure:
+  - ingestBaseUrl ({{ tpl .Values.ingestBaseUrl . }}) is that server release's "-services" Service, and
+  - ingestSecret matches that release's mail.ingestSecret (mail__transport__ingest__secret) exactly,
 or postfix-bridge's calls to /internal/mta will fail authorization.
+{{- if not (tpl (.Values.dkim.storage.existingClaim | default "") .) }}
+
+DKIM: Postfix signs with the keys in the "{{ include "postfixBridge.dkimKeysClaim" . }}" PVC, which the server doesn't
+write to. Set dkim.storage.existingClaim to the server's DKIM keys claim so Postfix signs with the keys the server
+publishes in DNS.
+{{- end }}

@@ -56,3 +56,29 @@ Usage:
         {{- tpl (.value | toYaml) .context }}
     {{- end }}
 {{- end -}}
+{{/*
+Renders `storageClassName: <class>` for a volume, or nothing for "default" or empty (the cluster's default storage class).
+The value is rendered before the comparison, so the '{{ .Values.common.storageClass }}' default is honored.
+Usage: include "postfixBridge.storageClassName" (dict "value" .Values.dkim.storage.storageClassName "context" $)
+*/}}
+{{- define "postfixBridge.storageClassName" -}}
+{{- $class := tpl (.value | default "") .context -}}
+{{- if and $class (ne $class "default") -}}
+storageClassName: {{ $class | quote }}
+{{- end -}}
+{{- end -}}
+
+{{/* Postfix's host name, rendered. */}}
+{{- define "postfixBridge.hostname" -}}
+{{- tpl (.Values.hostname | toString) . -}}
+{{- end -}}
+
+{{/* The DKIM keys claim Postfix mounts: dkim.storage.existingClaim, or the chart's own. */}}
+{{- define "postfixBridge.dkimKeysClaim" -}}
+{{- tpl (.Values.dkim.storage.existingClaim | default "") . | default (printf "%s-dkim-keys" (include "rrst.fullname" .)) -}}
+{{- end -}}
+
+{{/* The Secret holding Postfix's TLS certificate: tls.existingSecret, or the one the chart provides. */}}
+{{- define "postfixBridge.tlsSecretName" -}}
+{{- tpl (.Values.tls.existingSecret | default "") . | default (printf "%s-mail-tls-cert" (include "rrst.fullname" .)) -}}
+{{- end -}}

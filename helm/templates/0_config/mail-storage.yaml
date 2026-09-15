@@ -1,7 +1,9 @@
+{{- if not (tpl (.Values.dkim.storage.existingClaim | default "") .) }}
 ---
-# See values.yaml's mail.dkim.storage doc comment. Shared read-write with the RapidMX server's own
-# Deployment (FsDkimKeyProvider writes) - since that's a separate Helm release now, point both charts at
-# the same underlying storage (e.g. an existing PVC/NFS-backed volume) if they need to actually share it.
+# rspamd's DKIM signing keys (postfix.yaml mounts it at /var/lib/rspamd/dkim). The RapidMX server's FsDkimKeyProvider
+# writes the keys there, so the server must mount the same volume: point this chart at the server's claim with
+# dkim.storage.existingClaim (the server's chart does that for its bundled postfix-bridge), in which case this PVC isn't
+# created.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -9,12 +11,13 @@ metadata:
 spec:
   accessModes:
     - {{ .Values.dkim.storage.accessMode }}
-  {{- if ne .Values.dkim.storage.storageClassName "default" }}
-  storageClassName: {{ tpl .Values.dkim.storage.storageClassName . | quote }}
+  {{- with include "postfixBridge.storageClassName" (dict "value" .Values.dkim.storage.storageClassName "context" .) }}
+  {{ . }}
   {{- end }}
   resources:
     requests:
       storage: {{ .Values.dkim.storage.size }}
+{{- end }}
 ---
 # To supply your own DKIM key pair for a domain instead of relying on the RapidMX server's own
 # FsDkimKeyProvider/DKIM_AUTOGENERATE (recommended for production): drop the standard opendkim-genkey
@@ -29,8 +32,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  {{- if ne .Values.dkim.storage.storageClassName "default" }}
-  storageClassName: {{ tpl .Values.dkim.storage.storageClassName . | quote }}
+  {{- with include "postfixBridge.storageClassName" (dict "value" .Values.dkim.storage.storageClassName "context" .) }}
+  {{ . }}
   {{- end }}
   resources:
     requests:

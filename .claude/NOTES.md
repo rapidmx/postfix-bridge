@@ -98,3 +98,26 @@ pinned that via a new `thresholds` block in `vitest.config.ts` (there wasn't one
   not this bridge) - replaced with a `tcp_table`/Postfix-relevant example and Project Info fields
   (bridge version, RapidMX server version, Postfix version).
 - Not committed - JP said "hold off on commit" for this whole cross-repo pass.
+
+## 2026-09-15 — Helm chart fixes for the RapidMX server's bundled `postfixBridge` dependency (uncommitted, needs a 1.1.0 release)
+
+The server chart (`../server`) now bundles this chart (alias `postfixBridge`, pinned to 1.1.0) and sets `ingestSecret`, `ingestBaseUrl`, `hostname`, `domains`, `dkim.storage.existingClaim` (its own `<release>-dkim-keys`) and `tls.certManager.enabled`.
+
+**postfix-bridge chart**
+- `postfixBridge.storageClassName` helper renders the class before comparing: "default"/empty omit `storageClassName`
+  (both PVCs). Previously always `storageClassName: "default"`.
+- `dkim.storage.existingClaim` (tpl'd): mount that claim and don't create the chart's `-dkim-keys` PVC.
+- `tls.existingSecret` (tpl'd) and `tls.certManager.{enabled,issuerName,issuerKind}`. A Certificate only for a public
+  hostname with cert-manager enabled; otherwise a self-signed Secret (10 years) reused via `lookup` while its
+  `postfix-bridge.rapidmx.dev/self-signed-for` annotation matches the hostname (regenerated on a hostname change or when
+  replacing a cert-manager-written Secret). Previously regenerated on every upgrade.
+- `hostname`, `domains` (and NOTES) tpl'd. `ingestSecret` default `''` with `required` (so `helm lint` passes) and the
+  `ChangeMeIngestSecret` placeholder refused.
+- NOTES.txt/README use the real value names (`ingestSecret`, not `mail.ingestSecret`) and describe the standalone setup.
+- Not changed: `boky/postfix:latest` image tag; literal `postfix`/`postfix-bridge` Deployment/Service names; nothing
+  stamps Authentication-Results (so no authserv-id for the server's `mail.trustedAuthservId`). CHANGELOG is generated
+  from commits, left alone.
+
+Verified: `helm lint`; `helm template` defaults, public hostname, cert-manager off, existingSecret with templated
+values from a values file, empty/placeholder secret failures, certificate reuse with `lookup` stubbed; rendered as a
+subchart of the server chart for both installer TLS modes.

@@ -1,10 +1,16 @@
-# TLS certificate for Postfix's own public MX hostname (mail.hostname) - consumed by postfix.yaml's
-# smtpd_tls_cert_file/smtp_tls_cert_file, which enforce mandatory TLS (not the image's opportunistic "may"
-# default) on both of Postfix's internet-facing directions. Mirrors tls-certs.yaml's identical
-# real-cert-manager-Certificate-vs-self-signed-fallback split for the HTTP Gateway, except Postfix always
-# needs a cert file to exist (it can't just skip TLS the way the Gateway skips it for a plain-HTTP dev
-# listener), so the fallback branch here generates a real (self-signed) Secret instead of doing nothing.
-{{- if and (ne $.Values.hostname "localhost") (not (contains ".local" $.Values.hostname)) }}
+{{- /*
+Postfix's TLS certificate for its public host name (`hostname`), used by postfix.yaml's smtpd_tls_cert_file and
+smtp_tls_cert_file, which make TLS mandatory in both directions. Postfix can't start without a certificate file, so the
+chart always provides one unless tls.existingSecret names your own:
+- a cert-manager Certificate (tls.certManager.issuerName/issuerKind) for a public hostname while tls.certManager.enabled;
+- otherwise (localhost, *.local, or cert-manager disabled) a self-signed certificate, kept across upgrades while the
+  hostname is unchanged (a new one is generated when it changes).
+*/}}
+{{- $hostname := include "postfixBridge.hostname" . }}
+{{- $secretName := include "postfixBridge.tlsSecretName" . }}
+{{- $publicHostname := and (ne $hostname "localhost") (not (contains ".local" $hostname)) }}
+{{- if not (tpl (.Values.tls.existingSecret | default "") .) }}
+{{- if and .Values.tls.certManager.enabled $publicHostname }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -12,13 +18,13 @@ metadata:
   name: {{ include "rrst.fullname" . }}-mail-tls
   namespace: {{ $.Release.Namespace }}
 spec:
-  secretName: {{ include "rrst.fullname" . }}-mail-tls-cert
+  secretName: {{ $secretName }}
   duration: 2160h # 90d
   renewBefore: 360h # 15d
   subject:
     organizations:
       - RapidMX
-  commonName: {{ $.Values.hostname }}
+  commonName: {{ $hostname }}
   isCA: false
   privateKey:
     algorithm: ECDSA
@@ -28,24 +34,36 @@ spec:
     - server auth
     - client auth
   dnsNames:
-  - {{ $.Values.hostname }}
+  - {{ $hostname }}
   issuerRef:
-    name: letsencrypt-prod
-    kind: ClusterIssuer
+    name: {{ tpl .Values.tls.certManager.issuerName . }}
+    kind: {{ tpl .Values.tls.certManager.issuerKind . }}
 {{- else }}
 ---
-# No cert-manager Issuer can obtain a real certificate for a `.local`/localhost placeholder hostname - this
-# self-signed fallback keeps `docker compose`-style "just works" local evaluation working the same way
-# docker-compose.yml's own `postfix-tls-init` bootstrap cert does. Replace mail.hostname with a real
-# publicly resolvable MX hostname to switch this to a real cert-manager-issued Certificate above.
+{{- /*
+Reused from the existing Secret while it's this chart's self-signed one for the same host name (the annotation), so an
+upgrade doesn't replace the certificate. A Secret cert-manager wrote (after switching tls.certManager.enabled off) has no
+such annotation and gets replaced.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName | default dict }}
+{{- $existingData := get $existing "data" | default dict }}
+{{- $existingHost := dig "metadata" "annotations" "postfix-bridge.rapidmx.dev/self-signed-for" "" $existing }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "rrst.fullname" . }}-mail-tls-cert
+  name: {{ $secretName }}
   namespace: {{ $.Release.Namespace }}
+  annotations:
+    postfix-bridge.rapidmx.dev/self-signed-for: {{ $hostname | quote }}
 type: kubernetes.io/tls
 data:
-  {{- $cert := genSelfSignedCert $.Values.hostname nil (list $.Values.hostname) 365 }}
+  {{- if and (eq $existingHost $hostname) (get $existingData "tls.crt") (get $existingData "tls.key") }}
+  tls.crt: {{ get $existingData "tls.crt" }}
+  tls.key: {{ get $existingData "tls.key" }}
+  {{- else }}
+  {{- $cert := genSelfSignedCert $hostname nil (list $hostname) 3650 }}
   tls.crt: {{ $cert.Cert | b64enc }}
   tls.key: {{ $cert.Key | b64enc }}
+  {{- end }}
+{{- end }}
 {{- end }}

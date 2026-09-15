@@ -1,6 +1,6 @@
 ---
 # Real inbound SMTP needs to be reachable from the public internet - see values.yaml's
-# mail.postfix.serviceType doc comment for LoadBalancer vs NodePort.
+# postfix.serviceType doc comment for LoadBalancer vs NodePort.
 apiVersion: v1
 kind: Service
 metadata:
