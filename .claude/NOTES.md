@@ -121,3 +121,11 @@ The server chart (`../server`) now bundles this chart (alias `postfixBridge`, pi
 Verified: `helm lint`; `helm template` defaults, public hostname, cert-manager off, existingSecret with templated
 values from a values file, empty/placeholder secret failures, certificate reuse with `lookup` stubbed; rendered as a
 subchart of the server chart for both installer TLS modes.
+
+## 2026-09-15 — values.yaml comments restored after the release tool stripped them
+
+The `@rapidrest/cli` release command dropped every values.yaml comment (js-yaml load/dump); fixed in
+`D:/github/RapidREST/cli` (uncommitted, needs a cli release before the next release here). Restored in the working tree,
+not committed:
+- helm/values.yaml: 5e3baf6's file with the tag set to 1.1.0 (the 1.1.0 release commit changed nothing else there);
+  js-yaml data identical, helm lint clean.

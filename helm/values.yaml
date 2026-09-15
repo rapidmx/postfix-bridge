@@ -1,12 +1,24 @@
 common:
+  # The storage class of the chart's volumes; "default" (or empty) uses the cluster's default storage class.
   storageClass: default
+# Bearer secret authenticating postfix-bridge's calls to the RapidMX server's /internal/mta routes. Required, and must
+# equal the server's mail.ingestSecret (mail__transport__ingest__secret). May be a template, e.g.
+# '{{ .Values.global.mailIngestSecret }}'.
 ingestSecret: ''
+# The RapidMX server release's Service. May be a template.
 ingestBaseUrl: http://server-services/internal/mta
+# Comma-separated domains Postfix accepts outbound mail from (inbound mail is accepted for the server's own domains).
+# May be a template.
 domains: example.com
+# Postfix's public MX host name: its HELO name and the name on its TLS certificate. May be a template.
 hostname: mail.localhost
 tls:
+  # The Secret (type kubernetes.io/tls) holding Postfix's certificate. Empty to have the chart provide one: from
+  # cert-manager (below) for a public hostname, otherwise a self-signed certificate kept across upgrades.
   existingSecret: ''
   certManager:
+    # false self-signs the certificate for a public hostname too (e.g. without cert-manager). Mail servers deliver to a
+    # self-signed MX, but a certificate from a public CA is better for deliverability.
     enabled: true
     issuerName: letsencrypt-prod
     issuerKind: ClusterIssuer
@@ -14,6 +26,9 @@ dkim:
   selector: mail
   autogenerate: true
   storage:
+    # An existing PersistentVolumeClaim to keep the DKIM keys in instead of the chart's own, e.g. the RapidMX server's
+    # (its FsDkimKeyProvider writes the keys Postfix signs with). May be a template. With a ReadWriteOnce claim, both
+    # pods must run on the same node.
     existingClaim: ''
     storageClassName: '{{ .Values.common.storageClass }}'
     accessMode: ReadWriteOnce
@@ -29,6 +44,8 @@ postfix:
       memory: 128Mi
     limits:
       memory: 256Mi
+  # SMTP (port 25) must be reachable from the internet: LoadBalancer (e.g. k3s' ServiceLB, a cloud load balancer) or
+  # NodePort.
   serviceType: LoadBalancer
 service:
   image:
