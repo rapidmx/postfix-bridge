@@ -33,8 +33,13 @@ spec:
             - name: MTA_INGEST_SECRET
               valueFrom:
                 secretKeyRef:
+                  {{- if tpl ($.Values.ingestSecretRef.name | default "") $ }}
+                  name: {{ tpl $.Values.ingestSecretRef.name $ }}
+                  key: {{ $.Values.ingestSecretRef.key }}
+                  {{- else }}
                   name: {{ include "rrst.fullname" . }}-mail-ingest-secret
                   key: MTA_INGEST_SECRET
+                  {{- end }}
           ports:
             - containerPort: 10040
             - containerPort: 10041

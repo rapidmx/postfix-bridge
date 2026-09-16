@@ -129,3 +129,11 @@ The `@rapidrest/cli` release command dropped every values.yaml comment (js-yaml 
 not committed:
 - helm/values.yaml: 5e3baf6's file with the tag set to 1.1.0 (the 1.1.0 release commit changed nothing else there);
   js-yaml data identical, helm lint clean.
+
+## 2026-09-15 - ingestSecretRef, for a secret something else owns
+
+The RapidMX server chart now keeps its secrets in OpenBao, so there is no literal ingest secret to hand this chart.
+`ingestSecretRef` (name + key, tpl'd) points the bridge at an existing Secret - the server's own
+<release>-mail-ingest-secret, which External Secrets fills from the vault - and this chart then renders no Secret of its
+own and doesn't require ingestSecret. Needs a 1.2.0 release: the server chart pins that version and fails the render
+with a version check when an older copy is bundled.

@@ -1,10 +1,16 @@
 common:
   # The storage class of the chart's volumes; "default" (or empty) uses the cluster's default storage class.
   storageClass: default
-# Bearer secret authenticating postfix-bridge's calls to the RapidMX server's /internal/mta routes. Required, and must
-# equal the server's mail.ingestSecret (mail__transport__ingest__secret). May be a template, e.g.
-# '{{ .Values.global.mailIngestSecret }}'.
+# Bearer secret authenticating postfix-bridge's calls to the RapidMX server's /internal/mta routes. Required unless
+# ingestSecretRef is set, and must equal the server's mail.ingestSecret (mail__transport__ingest__secret). May be a
+# template, e.g. '{{ .Values.global.mailIngestSecret }}'.
 ingestSecret: ''
+# An existing Secret to read that value from instead - the server's own <release>-mail-ingest-secret, for a deployment
+# where something else owns it (the RapidMX server chart does this when its OpenBao vault holds the secrets). Nothing is
+# then rendered into this release's own Secret.
+ingestSecretRef:
+  name: ''
+  key: mail__transport__ingest__secret
 # The RapidMX server release's Service. May be a template.
 ingestBaseUrl: http://server-services/internal/mta
 # Comma-separated domains Postfix accepts outbound mail from (inbound mail is accepted for the server's own domains).

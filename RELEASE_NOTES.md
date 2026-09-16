@@ -1,5 +1,13 @@
 # Release Notes
 
+## Unreleased
+
+### Helm chart
+
+* `ingestSecretRef` (a Secret name and key) reads the ingest secret from a Secret something else owns, instead of this
+  chart rendering its own - which is how the RapidMX server chart hands over the secret its OpenBao vault holds. With it
+  set, `ingestSecret` isn't required and no Secret is rendered here.
+
 ## v1.1.0
 
 Helm chart changes, so the RapidMX server's chart can bundle this one (as its `postfixBridge` dependency).
