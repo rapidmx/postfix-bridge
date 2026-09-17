@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-17
+
+### Changed
+- Restore the helm values.yaml comments the 1.1.0 release commit stripped, keeping the 1.1.0 image tag
+- Document the restore in NOTES
+- Read the ingest secret from a Secret another chart owns through ingestSecretRef, so a parent chart can hand over a value it holds elsewhere - the RapidMX server's OpenBao vault, delivered by External Secrets - instead of this chart rendering its own; ingestSecret isn't required with it set
+- Note it in the release notes
+
+
 ## [1.1.0] - 2026-09-15
 
 ### Added
@@ -44,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed @rapidrest/cli as a dep
 
-[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rapidmx/postfix-bridge/releases/tag/v1.0.0

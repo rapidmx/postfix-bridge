@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.2.0
+
 ### Helm chart
 
 * `ingestSecretRef` (a Secret name and key) reads the ingest secret from a Secret something else owns, instead of this
