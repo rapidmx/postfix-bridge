@@ -1,6 +1,6 @@
 # Release Notes
 
-## v1.2.0
+## Unreleased
 
 ## v1.2.0
 
