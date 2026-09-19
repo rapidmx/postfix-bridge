@@ -2,6 +2,8 @@
 
 ## v1.2.0
 
+## v1.2.0
+
 ### Helm chart
 
 * Fixed every DKIM check failing: the Postfix image signs with OpenDKIM using `/etc/opendkim/keys/<domain>.private`, which it
