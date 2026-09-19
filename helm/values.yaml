@@ -53,6 +53,18 @@ postfix:
   # SMTP (port 25) must be reachable from the internet: LoadBalancer (e.g. k3s' ServiceLB, a cloud load balancer) or
   # NodePort.
   serviceType: LoadBalancer
+  # Local passes the client's real address through to Postfix, which it needs to tell internet clients (no relaying,
+  # TLS required) from the cluster's own (relay, plaintext) - see templates/1_deployments/postfix.yaml. With Cluster,
+  # load balancers such as k3s' ServiceLB present every client as an internal address, which would make Postfix an open
+  # relay for the domains above. Only used for LoadBalancer and NodePort.
+  externalTrafficPolicy: Local
+  # The clients that are the cluster's own (Postfix's mynetworks): they may relay to anywhere, in plaintext, as one of the
+  # domains above. Keep it to the pod and node networks - never a range internet clients could arrive from.
+  internalNetworks:
+    - 127.0.0.0/8
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
 service:
   image:
     registry: ghcr.io

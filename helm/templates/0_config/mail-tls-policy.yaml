@@ -19,3 +19,9 @@ data:
   tls_policy.txt: |
     postfix-bridge:2525    none
     postfix-bridge         none
+  # check_client_access table (postfix.yaml): each network in postfix.internalNetworks is sent through the
+  # internal_sender_check class, i.e. may relay as one of ALLOWED_SENDER_DOMAINS. Anyone else isn't listed.
+  internal_clients: |
+    {{- range $.Values.postfix.internalNetworks }}
+    {{ . }}    internal_sender_check
+    {{- end }}

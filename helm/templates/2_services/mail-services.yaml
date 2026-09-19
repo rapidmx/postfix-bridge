@@ -7,6 +7,11 @@ metadata:
   name: postfix
 spec:
   type: {{ $.Values.postfix.serviceType }}
+  {{- if ne $.Values.postfix.serviceType "ClusterIP" }}
+  # Local keeps the client's real address; Cluster masks it (k3s' ServiceLB shows every client as the node's CNI address),
+  # and Postfix trusts the cluster's networks - see postfix.yaml's "WHO MAY DO WHAT".
+  externalTrafficPolicy: {{ $.Values.postfix.externalTrafficPolicy }}
+  {{- end }}
   ports:
     - port: 25
       targetPort: 25

@@ -8,10 +8,20 @@
 # SENDMAIL_RELAY_HOST env var, defaulting to the "postfix" Service name this file also creates).
 #
 # TLS: both of Postfix's *internet-facing* directions - inbound smtpd on 25 and outbound smtp client - are
-# mandatory TLS ("encrypt" security level, not the image's opportunistic "may" default), backed by the
-# mail-tls-certs.yaml Secret. The two hops that stay plaintext on purpose are internal to the cluster
-# network (main service Deployment -> here, and here -> postfix-bridge via smtp_tls_policy_maps) - see
+# mandatory TLS, backed by the mail-tls-certs.yaml Secret. The two hops that stay plaintext on purpose are internal to
+# the cluster network (main service Deployment -> here, and here -> postfix-bridge via smtp_tls_policy_maps) - see
 # mail-tls-policy.yaml for why postfix-bridge specifically is exempted.
+#
+# WHO MAY DO WHAT on port 25. The image's defaults are for a send-only relay (any client outside mynetworks is rejected,
+# and so is any sender outside ALLOWED_SENDER_DOMAINS), which can't receive mail from the internet. This makes it an MX
+# that is also the cluster's outbound relay:
+#   - a client inside `postfix.internalNetworks` (the main service Deployment) may relay to anywhere, in plaintext, but
+#     only as one of ALLOWED_SENDER_DOMAINS (the internal_sender_check class below);
+#   - anyone else must use TLS (reject_plaintext_session), and may only send to a domain relay_domains accepts - never
+#     relay - from any sender address.
+# That split relies on Postfix seeing the client's REAL address: a load balancer that masks it behind an address in
+# internalNetworks (k3s' ServiceLB does with externalTrafficPolicy: Cluster) would make every internet client "internal",
+# i.e. an open relay for the allowed sender domains. See postfix.externalTrafficPolicy in values.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -63,10 +73,27 @@ spec:
               value: tcp:postfix-bridge:10041
             - name: POSTFIX_transport_maps
               value: static:smtp:postfix-bridge:2525
-            # Mandatory TLS, both directions - see this file's own top-of-file comment for why "encrypt"
-            # (not the image's opportunistic "may" default) is deliberate here.
+            # TLS is offered to everyone and required of everyone outside internalNetworks by the client
+            # restrictions below, rather than "encrypt" for all: "encrypt" would also refuse the main service
+            # Deployment's plaintext hop, and every outbound message would be rejected.
             - name: POSTFIX_smtpd_tls_security_level
-              value: encrypt
+              value: may
+            - name: POSTFIX_mynetworks
+              value: {{ join "," $.Values.postfix.internalNetworks | quote }}
+            - name: POSTFIX_smtpd_client_restrictions
+              value: permit_mynetworks, reject_plaintext_session
+            - name: POSTFIX_smtpd_relay_restrictions
+              value: permit_mynetworks, reject_unauth_destination
+            - name: POSTFIX_smtpd_sender_restrictions
+              value: reject_non_fqdn_sender
+            # An internal client's sender must be one of ALLOWED_SENDER_DOMAINS (the image builds that map from it, and
+            # it answers OK for those). internal_clients (mail-tls-policy.yaml) maps each internal network to this class.
+            - name: POSTFIX_smtpd_restriction_classes
+              value: internal_sender_check
+            - name: POSTFIX_internal_sender_check
+              value: check_sender_access lmdb:/etc/postfix/allowed_senders, reject
+            - name: POSTFIX_smtpd_recipient_restrictions
+              value: reject_non_fqdn_recipient, reject_unknown_recipient_domain, check_client_access cidr:/etc/postfix/internal_clients, reject_unauth_destination
             - name: POSTFIX_smtpd_tls_cert_file
               value: /etc/postfix/tls/tls.crt
             - name: POSTFIX_smtpd_tls_key_file
@@ -102,6 +129,10 @@ spec:
             - name: mail-tls-policy
               mountPath: /etc/postfix/tls_policy.txt
               subPath: tls_policy.txt
+              readOnly: true
+            - name: mail-tls-policy
+              mountPath: /etc/postfix/internal_clients
+              subPath: internal_clients
               readOnly: true
       volumes:
         - name: dkim-keys

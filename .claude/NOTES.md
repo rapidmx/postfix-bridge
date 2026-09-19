@@ -137,3 +137,30 @@ The RapidMX server chart now keeps its secrets in OpenBao, so there is no litera
 <release>-mail-ingest-secret, which External Secrets fills from the vault - and this chart then renders no Secret of its
 own and doesn't require ingestSecret. Needs a 1.2.0 release: the server chart pins that version and fails the render
 with a version check when an older copy is bundled.
+
+## 2026-09-19 - Postfix as an MX and the cluster's relay: the chart was an open relay and could neither send nor receive
+
+Found by running the chart (via the server chart's `postfixBridge` dependency) on a real k3s host with port 25 exposed.
+Changes are in `helm/` (uncommitted; needs a release after 1.2.0 - the server chart bundles a locally patched 1.2.0 until then).
+
+- **Open relay:** k3s ServiceLB with `externalTrafficPolicy: Cluster` shows every internet client as `10.42.0.1`; boky/postfix
+  trusts `mynetworks` 10/8, 172.16/12, 192.168/16 and sets `smtpd_relay_restrictions=permit`, so from outside
+  `MAIL FROM:<x@allowed-domain>` `RCPT TO:<anyone>` was accepted. Reproduced from the internet (refused only by the target's null
+  MX) and confirmed the cause with a throwaway socat LoadBalancer: Cluster -> 10.42.0.1, Local -> the real address. The
+  `postfix` Service now sets `externalTrafficPolicy: Local` (`postfix.externalTrafficPolicy`).
+- **Could not receive:** the image's send-only defaults reject any client outside mynetworks and any sender outside
+  ALLOWED_SENDER_DOMAINS. **Could not send:** `smtpd_tls_security_level=encrypt` refused the server's plaintext msmtp hop
+  (`530 Must issue a STARTTLS command first`), contradicting this file's own "plaintext internal hop" comments.
+- **New policy (all `POSTFIX_*` env, boky applies them after its defaults):** `smtpd_tls_security_level=may`;
+  `smtpd_client_restrictions = permit_mynetworks, reject_plaintext_session` (outsiders need TLS); `smtpd_relay_restrictions =
+  permit_mynetworks, reject_unauth_destination`; a restriction class `internal_sender_check` (`check_sender_access
+  lmdb:/etc/postfix/allowed_senders, reject`, the map boky builds from ALLOWED_SENDER_DOMAINS) reached through
+  `check_client_access cidr:/etc/postfix/internal_clients` (a new key in the mail-tls-policy ConfigMap, generated from
+  `postfix.internalNetworks`); recipients otherwise go through `reject_unauth_destination`, i.e. relay_domains only.
+- **Verified from the internet and from the server pod:** outsider -> outside domain `Relay access denied` (spoofed allowed
+  sender too); plaintext outsider `450 Session encryption is required`; in-cluster plaintext as an allowed sender 250, as
+  another domain refused. A message handed to the bridge's :2525 listener reached the server's ingest queue and a mailbox.
+- **Not done:** docker-compose.yml still has the old settings (docker keeps client addresses, so not an open relay, but the same
+  send/receive problems); no chart test harness exists here, verification was `helm template`/`lint` plus the live cluster.
+- **If a load balancer other than k3s' ServiceLB is used,** check which address Postfix logs for an outside connection before
+  opening port 25 - anything inside `internalNetworks` is trusted to relay.

@@ -98,6 +98,13 @@ Installed on its own, set:
 - `tls.existingSecret` to use your own certificate, or `tls.certManager.enabled=false` to self-sign one for a public
   hostname when cert-manager (with the `letsencrypt-prod` ClusterIssuer, `tls.certManager.issuerName`) isn't available.
 
+Port 25 is both the MX and the cluster's outbound relay, so Postfix has to tell the two apart by the client's address:
+clients in `postfix.internalNetworks` (default: the private ranges, i.e. the pod and node networks) may relay to anywhere in
+plaintext, as one of `domains`; everyone else must use TLS and may only send to a domain the server accepts. That only holds if
+Postfix sees the real client address, which is why the `postfix` Service uses `postfix.externalTrafficPolicy: Local`. **With
+`Cluster`, k3s' ServiceLB shows every internet client as an internal address, and Postfix becomes an open relay for `domains`.**
+Behind another load balancer, check what address Postfix logs for an outside connection before opening port 25.
+
 See `helm/values.yaml` for the full set of configurable values.
 
 ## Debugging

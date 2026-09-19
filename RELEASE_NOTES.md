@@ -4,6 +4,13 @@
 
 ### Helm chart
 
+* Fixed Postfix being an open relay for `domains` behind k3s' ServiceLB, which masks every client as an internal address
+  that Postfix trusts (`mynetworks` covers 10.0.0.0/8): the `postfix` Service now sets `externalTrafficPolicy: Local`
+  (`postfix.externalTrafficPolicy`), so Postfix sees the real client address
+* Fixed Postfix rejecting all inbound internet mail (the image's send-only restrictions refuse any client outside
+  `mynetworks`) and all outbound mail from the server (mandatory TLS on port 25 refused its plaintext hop): port 25 now
+  accepts mail for the domains the server serves from anyone over TLS without relaying, and relays for clients in
+  the new `postfix.internalNetworks`, in plaintext, only as one of `domains`
 * `ingestSecretRef` (a Secret name and key) reads the ingest secret from a Secret something else owns, instead of this
   chart rendering its own - which is how the RapidMX server chart hands over the secret its OpenBao vault holds. With it
   set, `ingestSecret` isn't required and no Secret is rendered here.
