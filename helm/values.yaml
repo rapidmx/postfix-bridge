@@ -43,7 +43,7 @@ service:
   image:
     registry: ghcr.io
     repository: rapidmx/postfix-bridge
-    tag: 1.2.0
+    tag: 1.3.0
   resources:
     requests:
       cpu: 50m

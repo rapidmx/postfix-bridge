@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-19
+
+### Fixed
+- Fixed release notes
+
 - Read the ingest secret from a Secret another chart owns through ingestSecretRef, so a parent chart can hand over a value it holds elsewhere - the RapidMX server's OpenBao vault, delivered by External Secrets - instead of this chart rendering its own; ingestSecret isn't required with it set
 - Note it in the release notes
 
@@ -17,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Document the restore in NOTES
 - Read the ingest secret from a Secret another chart owns through ingestSecretRef, so a parent chart can hand over a value it holds elsewhere - the RapidMX server's OpenBao vault, delivered by External Secrets - instead of this chart rendering its own; ingestSecret isn't required with it set
 - Note it in the release notes
-
 
 ## [1.1.0] - 2026-09-15
 
@@ -56,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed @rapidrest/cli as a dep
 
-[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rapidmx/postfix-bridge/releases/tag/v1.0.0
