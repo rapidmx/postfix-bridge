@@ -36,6 +36,34 @@ spec:
       labels:
         app: postfix
     spec:
+      initContainers:
+        # This image signs with OpenDKIM and reads /etc/opendkim/keys/<domain>.private, generating its own key there when
+        # the file is missing (DKIM_AUTOGENERATE) - but the key published in DNS (the DNS-setup page) is the one the main
+        # service writes to /var/lib/rspamd/dkim/<domain>.<selector>.key. Left alone, Postfix signs with a key nobody
+        # published and every DKIM check fails. So the server's key is copied to where the image looks, before it starts;
+        # the image then keeps it ("Will not overwrite"). A domain added later is picked up on the next start, which
+        # adding it to `domains` needs anyway.
+        - name: dkim-keys-sync
+          image: {{ $.Values.postfix.image.registry }}/{{ $.Values.postfix.image.repository }}:{{ $.Values.postfix.image.tag }}
+          command:
+            - sh
+            - -c
+            - |
+              for domain in {{ tpl ($.Values.domains | toString) $ | replace "," " " }}; do
+                src="/dkim-keys/${domain}.{{ $.Values.dkim.selector }}.key"
+                dst="/opendkim-keys/${domain}.private"
+                if [ -f "$src" ] && ! cmp -s "$src" "$dst"; then
+                  echo "Using the main service's DKIM key for ${domain}"
+                  install -m 0400 "$src" "$dst"
+                  rm -f "/opendkim-keys/${domain}.txt"
+                fi
+              done
+          volumeMounts:
+            - name: dkim-keys
+              mountPath: /dkim-keys
+              readOnly: true
+            - name: dkim-opendkim-keys
+              mountPath: /opendkim-keys
       containers:
         - name: postfix
           image: {{ $.Values.postfix.image.registry }}/{{ $.Values.postfix.image.repository }}:{{ $.Values.postfix.image.tag }}
@@ -44,7 +72,8 @@ spec:
             # keep in sync with the Domains added via the admin console. Independent of INBOUND
             # acceptance, which postfix-bridge backs dynamically from this app's own Domain database.
             - name: ALLOWED_SENDER_DOMAINS
-              value: {{ tpl ($.Values.domains | toString) $ | quote }}
+              # The image splits this on whitespace, not commas.
+              value: {{ tpl ($.Values.domains | toString) $ | replace "," " " | trim | quote }}
             # Postfix's own SMTP identity (HELO/EHLO name, Received headers) - deliberately kept in sync
             # with the TLS certificate's CN below (both driven by `hostname`). A HELO name that doesn't
             # match the presented certificate is a common deliverability red flag with receiving providers.
@@ -73,6 +102,11 @@ spec:
               value: tcp:postfix-bridge:10041
             - name: POSTFIX_transport_maps
               value: static:smtp:postfix-bridge:2525
+            # Postfix's own DNS client doesn't apply the pod's search domains, so it can't find the bare Service name above
+            # ("Host or domain name not found ... name=postfix-bridge type=AAAA") and bounces everything it accepts. Falling
+            # back to the system resolver, which does, fixes that; the tcp_table lookups already use it.
+            - name: POSTFIX_smtp_host_lookup
+              value: dns, native
             # TLS is offered to everyone and required of everyone outside internalNetworks by the client
             # restrictions below, rather than "encrypt" for all: "encrypt" would also refuse the main service
             # Deployment's plaintext hop, and every outbound message would be rejected.
@@ -117,10 +151,9 @@ spec:
             # mount of this same PVC.
             - name: dkim-keys
               mountPath: /var/lib/rspamd/dkim
-            # To supply your own DKIM key pair for a domain instead of relying on
-            # FsDkimKeyProvider/DKIM_AUTOGENERATE: exec into this pod and drop the standard
-            # opendkim-genkey output under /etc/opendkim/keys/<domain>/ - see mail-storage.yaml's own
-            # doc comment. The image's own startup script imports it into dkim-keys above on next restart.
+            # OpenDKIM's keys, one <domain>.private per domain (see the dkim-keys-sync init container: the main service's
+            # key for a domain replaces one the image generated). To supply a different key for a domain, put it here
+            # as <domain>.private with no <domain>.<selector>.key in dkim-keys above, and restart.
             - name: dkim-opendkim-keys
               mountPath: /etc/opendkim/keys
             - name: mail-tls

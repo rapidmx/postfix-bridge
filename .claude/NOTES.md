@@ -164,3 +164,18 @@ Changes are in `helm/` (uncommitted; needs a release after 1.2.0 - the server ch
   send/receive problems); no chart test harness exists here, verification was `helm template`/`lint` plus the live cluster.
 - **If a load balancer other than k3s' ServiceLB is used,** check which address Postfix logs for an outside connection before
   opening port 25 - anything inside `internalNetworks` is trusted to relay.
+
+### 2026-09-19 (later) - DKIM key mismatch and Postfix's DNS client, found by sending real mail
+
+- **DKIM never verified.** The image's DKIM backend is OpenDKIM (`/scripts/functions.sh` `postfix_setup_dkim`), not rspamd as the chart
+  comments said: it reads `/etc/opendkim/keys/<domain>.private` (flat, not `<domain>/<selector>.private`), and with DKIM_AUTOGENERATE it
+  generates that file when missing and then never overwrites it. So it signed with its own key while DNS carried the server's
+  (`/var/lib/rspamd/dkim/<domain>.<selector>.key`, what the DNS-setup page shows). Confirmed by fingerprint (`openssl rsa -pubout`) and by
+  dkimpy failing against DNS with a matching body hash. Fixed with a `dkim-keys-sync` init container that installs the server's key at
+  the image's path (the image then keeps it); dkimpy now verifies a delivered message against the published record. A domain added
+  later needs a Postfix restart, as ALLOWED_SENDER_DOMAINS already does.
+- **`ALLOWED_SENDER_DOMAINS` is split on whitespace** by the image; the chart's comma-separated `domains` made several domains one bogus
+  entry. Now converted.
+- **Postfix's DNS client ignores the pod's search domains,** so the bare `postfix-bridge` in transport_maps bounced every accepted message
+  (`Name service error for name=postfix-bridge type=AAAA: Host not found`) although `postmap tcp:postfix-bridge:...` (system resolver)
+  worked. `smtp_host_lookup = dns, native` fixes it; the bounce DSN went to the test sender (example.org, null MX), so nothing left the host.

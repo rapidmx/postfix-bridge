@@ -4,6 +4,12 @@
 
 ### Helm chart
 
+* Fixed every DKIM check failing: the Postfix image signs with OpenDKIM using `/etc/opendkim/keys/<domain>.private`, which it
+  generates itself, while the key in DNS is the one the main service writes to `/var/lib/rspamd/dkim`; an init container now copies the
+  main service's key to where the image looks, so the signature verifies against the published record
+* Fixed `domains` with more than one domain: the image splits `ALLOWED_SENDER_DOMAINS` on whitespace, so the comma-separated value is now
+  passed with spaces
+* Fixed Postfix bouncing every message it accepted with "Host or domain name not found ... name=postfix-bridge type=AAAA": its DNS client doesn't apply the pod's search domains, so it now falls back to the system resolver (`smtp_host_lookup = dns, native`)
 * Fixed Postfix being an open relay for `domains` behind k3s' ServiceLB, which masks every client as an internal address
   that Postfix trusts (`mynetworks` covers 10.0.0.0/8): the `postfix` Service now sets `externalTrafficPolicy: Local`
   (`postfix.externalTrafficPolicy`), so Postfix sees the real client address
