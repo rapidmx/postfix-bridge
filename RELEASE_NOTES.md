@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## v1.2.0
 
 ### Helm chart
 

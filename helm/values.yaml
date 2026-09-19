@@ -1,30 +1,15 @@
 common:
-  # The storage class of the chart's volumes; "default" (or empty) uses the cluster's default storage class.
   storageClass: default
-# Bearer secret authenticating postfix-bridge's calls to the RapidMX server's /internal/mta routes. Required unless
-# ingestSecretRef is set, and must equal the server's mail.ingestSecret (mail__transport__ingest__secret). May be a
-# template, e.g. '{{ .Values.global.mailIngestSecret }}'.
 ingestSecret: ''
-# An existing Secret to read that value from instead - the server's own <release>-mail-ingest-secret, for a deployment
-# where something else owns it (the RapidMX server chart does this when its OpenBao vault holds the secrets). Nothing is
-# then rendered into this release's own Secret.
 ingestSecretRef:
   name: ''
   key: mail__transport__ingest__secret
-# The RapidMX server release's Service. May be a template.
 ingestBaseUrl: http://server-services/internal/mta
-# Comma-separated domains Postfix accepts outbound mail from (inbound mail is accepted for the server's own domains).
-# May be a template.
 domains: example.com
-# Postfix's public MX host name: its HELO name and the name on its TLS certificate. May be a template.
 hostname: mail.localhost
 tls:
-  # The Secret (type kubernetes.io/tls) holding Postfix's certificate. Empty to have the chart provide one: from
-  # cert-manager (below) for a public hostname, otherwise a self-signed certificate kept across upgrades.
   existingSecret: ''
   certManager:
-    # false self-signs the certificate for a public hostname too (e.g. without cert-manager). Mail servers deliver to a
-    # self-signed MX, but a certificate from a public CA is better for deliverability.
     enabled: true
     issuerName: letsencrypt-prod
     issuerKind: ClusterIssuer
@@ -32,9 +17,6 @@ dkim:
   selector: mail
   autogenerate: true
   storage:
-    # An existing PersistentVolumeClaim to keep the DKIM keys in instead of the chart's own, e.g. the RapidMX server's
-    # (its FsDkimKeyProvider writes the keys Postfix signs with). May be a template. With a ReadWriteOnce claim, both
-    # pods must run on the same node.
     existingClaim: ''
     storageClassName: '{{ .Values.common.storageClass }}'
     accessMode: ReadWriteOnce
@@ -50,16 +32,8 @@ postfix:
       memory: 128Mi
     limits:
       memory: 256Mi
-  # SMTP (port 25) must be reachable from the internet: LoadBalancer (e.g. k3s' ServiceLB, a cloud load balancer) or
-  # NodePort.
   serviceType: LoadBalancer
-  # Local passes the client's real address through to Postfix, which it needs to tell internet clients (no relaying,
-  # TLS required) from the cluster's own (relay, plaintext) - see templates/1_deployments/postfix.yaml. With Cluster,
-  # load balancers such as k3s' ServiceLB present every client as an internal address, which would make Postfix an open
-  # relay for the domains above. Only used for LoadBalancer and NodePort.
   externalTrafficPolicy: Local
-  # The clients that are the cluster's own (Postfix's mynetworks): they may relay to anywhere, in plaintext, as one of the
-  # domains above. Keep it to the pod and node networks - never a range internet clients could arrive from.
   internalNetworks:
     - 127.0.0.0/8
     - 10.0.0.0/8
@@ -69,7 +43,7 @@ service:
   image:
     registry: ghcr.io
     repository: rapidmx/postfix-bridge
-    tag: 1.1.0
+    tag: 1.2.0
   resources:
     requests:
       cpu: 50m
