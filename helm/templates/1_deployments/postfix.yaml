@@ -167,6 +167,11 @@ spec:
               mountPath: /etc/postfix/internal_clients
               subPath: internal_clients
               readOnly: true
+            # Run by the image at startup, without the executable bit (so with bash): see the ConfigMap for what it fixes.
+            - name: mail-tls-policy
+              mountPath: /docker-init.d/opendkim.sh
+              subPath: opendkim.sh
+              readOnly: true
       volumes:
         - name: dkim-keys
           persistentVolumeClaim:

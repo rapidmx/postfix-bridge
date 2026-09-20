@@ -1,5 +1,12 @@
 # Release Notes
 
+## Unreleased
+
+### Helm chart
+
+* Fixed OpenDKIM never verifying a signature, so no inbound `Authentication-Results` result was ever stamped: its key lookups through the container's resolver fail with `unexpected reply class/type (-1/-1)` unless it is told which name server to ask, so an init script points it at the pod's resolver
+* Fixed anyone who could reach port 25 getting their mail signed as one of your domains: the image lists every address as OpenDKIM's internal hosts, so a message from the internet with a forged `From:` of your domain came back with your genuine DKIM signature; only `postfix.internalNetworks` are internal now
+
 ## v1.3.0
 
 ## v1.2.0

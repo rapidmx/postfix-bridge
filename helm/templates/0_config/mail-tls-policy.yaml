@@ -25,3 +25,24 @@ data:
     {{- range $.Values.postfix.internalNetworks }}
     {{ . }}    internal_sender_check
     {{- end }}
+  # Run by the image's startup (from /docker-init.d, after it has written OpenDKIM's config, before OpenDKIM starts). Two things
+  # its OpenDKIM setup gets wrong for a Postfix that is also the public MX:
+  #
+  # 1. OpenDKIM (libunbound) fails every key lookup through the container's resolver with "unexpected reply class/type
+  #    (-1/-1)" unless it's told which name server to ask, so it could never verify a signature and never stamped an
+  #    Authentication-Results result - which is what the RapidMX server's mail.trustedAuthservId trusts.
+  # 2. The image lists every address (0.0.0.0/0, read as a regular expression, which matches nothing) as OpenDKIM's "internal
+  #    hosts" - the ones it signs for rather than verifies - so anyone who could reach port 25 got their mail signed as any
+  #    of our domains. Only the networks Postfix itself trusts to relay (postfix.internalNetworks) are internal.
+  opendkim.sh: |
+    ns=$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf)
+    if [ -n "$ns" ]; then
+      echo "Using name server $ns for OpenDKIM key lookups"
+      sed -i -E '/^[[:space:]]*#?[[:space:]]*Nameservers/d' /etc/opendkim/opendkim.conf
+      printf 'Nameservers             %s\n' "$ns" >> /etc/opendkim/opendkim.conf
+    fi
+    if [ -n "$POSTFIX_mynetworks" ]; then
+      echo "Signing only mail from $POSTFIX_mynetworks"
+      sed -i -E '/^[[:space:]]*#?[[:space:]]*InternalHosts/d' /etc/opendkim/opendkim.conf
+      printf 'InternalHosts           %s\n' "$POSTFIX_mynetworks" >> /etc/opendkim/opendkim.conf
+    fi

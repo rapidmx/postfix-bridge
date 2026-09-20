@@ -179,3 +179,16 @@ Changes are in `helm/` (uncommitted; needs a release after 1.2.0 - the server ch
 - **Postfix's DNS client ignores the pod's search domains,** so the bare `postfix-bridge` in transport_maps bounced every accepted message
   (`Name service error for name=postfix-bridge type=AAAA: Host not found`) although `postmap tcp:postfix-bridge:...` (system resolver)
   worked. `smtp_host_lookup = dns, native` fixes it; the bounce DSN went to the test sender (example.org, null MX), so nothing left the host.
+
+### 2026-09-20 - OpenDKIM never verified, and signed for everyone (found chasing the server's "mail.trustedAuthservId is empty")
+
+Both are in the boky/postfix image's OpenDKIM setup and were reproduced in a local docker lab, then confirmed on a real k3s host. Fix: `opendkim.sh` in the
+mail-tls-policy ConfigMap, mounted at `/docker-init.d/opendkim.sh` (the image runs `*.sh` there with bash, after writing OpenDKIM's config and before it starts).
+- **No key lookup ever worked:** libunbound in this image fails through the container resolver with `unexpected reply class/type (-1/-1)` (also against real
+  public DNS in a plain container, and with an empty config). `Nameservers <ip>` fixes it (`opendkim-testkey`: key OK / record not found). Set from the pod's
+  own `/etc/resolv.conf`. Verification then produced `Authentication-Results: <myhostname>; dkim=pass|fail ...`; a forged header claiming that authserv-id is stripped.
+- **Everyone was "internal":** TrustedHosts is `0.0.0.0/0` and InternalHosts/ExternalIgnoreList are `refile:` (regex) on it, matching nothing, so OpenDKIM signed anything
+  that matched the SigningTable - including an unsigned message from the internet with a forged From. InternalHosts is now `$POSTFIX_mynetworks`
+  (comma CIDR list, valid OpenDKIM syntax; the image's own `OPENDKIM_*` env hook can't carry it: it edits the file with sed using `/` as the delimiter).
+- Lab notes: `.test`/`.example` names are special-use in unbound and never reach DNS; dnsmasq's replies also failed until swapped for unbound. Not done: SPF/DMARC
+  verification (OpenDKIM only does DKIM), no compose change.
