@@ -1,0 +1,13 @@
+{
+    "smtp": {
+        "mailFrom": "<>",
+        "mailFromParameters": "BODY=8BITMIME",
+        "rcptTo": ["alice@owned.lab"]
+    },
+    "forwardedToIngest": {
+        "endpoint": "POST /internal/mta/deliver",
+        "contentType": "message/rfc822",
+        "X-Envelope-From": "",
+        "X-Envelope-To": "alice@owned.lab"
+    }
+}

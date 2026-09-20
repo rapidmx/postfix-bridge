@@ -5,9 +5,43 @@
 // for outbound relay - see PostfixSendmailTransport) as the test client - no mocking of the protocol
 // itself, only of MtaIngestClient (the one real external dependency this class has).
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as net from "node:net";
 import * as nodemailer from "nodemailer";
 import { SmtpDeliveryServer } from "../src/SmtpDeliveryServer.js";
 import { MtaIngestClient } from "../src/MtaIngestClient.js";
+
+function fixture(name: string): Buffer {
+    return fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
+}
+
+/** Plays one SMTP transaction over a real socket, sending each command only after the previous reply, and resolves with
+ * every reply line in order. Raw sockets, not nodemailer, because the point is the exact bytes Postfix puts on the wire. */
+function smtpTransaction(port: number, steps: (string | Buffer)[]): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+        const replies: string[] = [];
+        let pending = "";
+        let next = 0;
+        const socket = net.connect(port, "127.0.0.1");
+        socket.on("error", reject);
+        socket.on("data", (chunk: Buffer) => {
+            pending += chunk.toString("latin1");
+            let end: number;
+            // A reply is complete at a line of the form "250 text" (a "-" after the code means more lines follow).
+            while ((end = pending.search(/^\d{3} .*\r\n/m)) !== -1) {
+                const lineEnd = pending.indexOf("\r\n", end) + 2;
+                replies.push(pending.slice(0, lineEnd).trimEnd());
+                pending = pending.slice(lineEnd);
+                if (next < steps.length) {
+                    socket.write(steps[next++]);
+                } else {
+                    socket.end();
+                }
+            }
+        });
+        socket.on("close", () => resolve(replies));
+    });
+}
 
 describe("SmtpDeliveryServer Tests", () => {
     let server: SmtpDeliveryServer;
@@ -58,6 +92,48 @@ describe("SmtpDeliveryServer Tests", () => {
 
         expect(deliverMock).toHaveBeenCalledWith("", ["b@example.com"], expect.any(Buffer));
         expect(callback).toHaveBeenCalledWith();
+    });
+
+    it("Accepts a real null-sender bounce (MAIL FROM:<>) from Postfix and forwards an empty envelope-from and the exact DSN bytes.", async () => {
+        // dsn-unknown-recipient-550.eml is the message Postfix generated (and this bridge forwarded to
+        // /internal/mta/deliver) when a recipient's MX refused with a 550; the commands below are the ones it sent.
+        await start();
+        const dsn = fixture("dsn-unknown-recipient-550.eml");
+
+        const replies = await smtpTransaction(port, [
+            "EHLO mail.owned.lab\r\n",
+            "MAIL FROM:<> BODY=8BITMIME\r\n",
+            "RCPT TO:<alice@owned.lab>\r\n",
+            "DATA\r\n",
+            Buffer.concat([dsn, Buffer.from(".\r\n")]),
+            "QUIT\r\n",
+        ]);
+
+        expect(replies.map((r) => r.slice(0, 3))).toEqual(["220", "250", "250", "250", "354", "250", "221"]);
+        expect(deliverMock).toHaveBeenCalledTimes(1);
+        const [envelopeFrom, envelopeTo, raw] = deliverMock.mock.calls[0];
+        expect(envelopeFrom).toBe("");
+        expect(envelopeTo).toEqual(["alice@owned.lab"]);
+        expect(Buffer.compare(raw, dsn)).toBe(0);
+    });
+
+    it("Forwards the null sender of every kind of Postfix DSN (failed, expired, delayed) the same way.", async () => {
+        await start();
+        for (const name of ["dsn-expired-450.eml", "dsn-delayed-450.eml"]) {
+            deliverMock.mockClear();
+            const dsn = fixture(name);
+            const replies = await smtpTransaction(port, [
+                "EHLO mail.owned.lab\r\n",
+                "MAIL FROM:<>\r\n",
+                "RCPT TO:<alice@owned.lab>\r\n",
+                "DATA\r\n",
+                Buffer.concat([dsn, Buffer.from(".\r\n")]),
+                "QUIT\r\n",
+            ]);
+            expect(replies[5]).toMatch(/^250 /);
+            expect(deliverMock).toHaveBeenCalledWith("", ["alice@owned.lab"], expect.any(Buffer));
+            expect(Buffer.compare(deliverMock.mock.calls[0][2], dsn)).toBe(0);
+        }
     });
 
     it("Invokes the callback with the stream's error if the incoming data stream errors.", async () => {

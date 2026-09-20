@@ -1,2 +1,4 @@
 # Force LF line endings for shell scripts on all platforms
 *.sh text eol=lf
+# Captured mail is compared byte for byte (SMTP wants CRLF): never normalise line endings.
+test/fixtures/*.eml -text

@@ -176,7 +176,7 @@ Changes are in `helm/` (uncommitted; needs a release after 1.2.0 - the server ch
   later needs a Postfix restart, as ALLOWED_SENDER_DOMAINS already does.
 - **`ALLOWED_SENDER_DOMAINS` is split on whitespace** by the image; the chart's comma-separated `domains` made several domains one bogus
   entry. Now converted.
-- **Postfix's DNS client ignores the pod's search domains,** so the bare `postfix-bridge` in transport_maps bounced every accepted message
+- **Postfix's DNS client ignores the pod's search domains,** so the bare `postfix-bridge` in transport_maps (since replaced by relay_transport, see 2026-09-20 "external recipients") bounced every accepted message
   (`Name service error for name=postfix-bridge type=AAAA: Host not found`) although `postmap tcp:postfix-bridge:...` (system resolver)
   worked. `smtp_host_lookup = dns, native` fixes it; the bounce DSN went to the test sender (example.org, null MX), so nothing left the host.
 
@@ -216,3 +216,50 @@ changes live, and unbound holding the test DKIM keys (14/14 checks), then on a r
   (Postfix's reject_unknown_recipient_domain needs the recipient domain in public DNS, and a real domain needs real DNS verification) - do it when a real domain is registered.
 - **Lab pitfalls:** writing a file for a bind mount on Docker-for-Windows via truncate+write can be seen empty in the container; Windows-written files get CRLF (a CRLF `resolv.conf`
   silently disables glibc's nameserver line); Git Bash rewrites `/path` docker args; unbound treats `.test`/`.example` as special-use.
+
+### 2026-09-20 - external recipients were handed to postfix-bridge, not delivered: `transport_maps = static:` matches everything
+
+**Symptom (live k3s host):** every message the RapidMX server sent to an external address (a reply to jean-philippe@steinmetz12.com) vanished. Postfix logged
+`postfix/smtp: 30F4E100E98: to=<jean-philippe@steinmetz12.com>, relay=postfix-bridge[10.43.139.208]:2525, dsn=2.0.0, status=sent (250 OK: message queued)` and the
+server's ingest then logged `MailIngestRoute: dropping delivery for unresolvable recipient ...`. `postmap -q steinmetz12.com tcp:postfix-bridge:10040` was correctly
+"no match", so relay_domains itself was right.
+- **Root cause:** `POSTFIX_transport_maps = static:smtp:postfix-bridge:2525` (postfix.yaml and docker-compose.yml). A `static:` table answers for every key, and
+  transport_maps is consulted before the relay_domains/default_transport split, so every recipient - external ones included - was routed to the bridge's :2525. The
+  bridge cannot tell "external, please deliver" from "mine" (it only ever POSTs to /internal/mta/deliver), so it 250'd and the server dropped it.
+- **Why it wasn't caught:** outbound was only ever tested to a LOCAL (relay_domains) domain, where the wrong and the right route are the same; the 2026-09-19 lab
+  bounced-mail evidence went to a null-MX example.org sender so nothing left the box either. `status=sent` to `postfix-bridge` looks like success in the log.
+- **Fix:** `POSTFIX_relay_transport = smtp:postfix-bridge:2525` and no transport_maps (chart and compose). Stock Postfix: `relay_transport` (default `relay`, no next hop, so
+  it would MX-look-up the domain itself) is the transport for relay_domains destinations, and only those; a next hop in it overrides the recipient domain. Everything
+  else uses default_transport (`smtp`, MX lookup). It composes with the rest: `smtp_host_lookup = dns, native` resolves the bare `postfix-bridge` for both, and
+  smtp_tls_policy_maps is keyed by the transport's next hop as written (`postfix-bridge:2525`, no brackets - a bracketed `[postfix-bridge]:2525` would need a matching key),
+  so the existing tls_policy.txt carve-out still applies. Not chosen: `relay:postfix-bridge:2525` (same smtp client, logs as postfix/relay, which would make bridge hand-offs
+  distinguishable from MX deliveries in the log - a fair follow-up, and the tls_policy key is the same).
+- **Lab proof** (docker: boky/postfix:latest run on the chart's own rendered env + ConfigMap files, unbound serving `.lab`, the REAL bridge from `dist/` with a fake
+  /internal/mta API and a capturing proxy in front of its :2525, three node smtp-server sinks as MXes: accept, 550-at-RCPT, 450-at-RCPT; the submitter is a container in
+  172.16/12 = internal). BEFORE: `to=<jp@ext.lab>, relay=postfix-bridge[172.28.0.11]:2525, dsn=2.0.0, status=sent` and the ext.lab MX saw nothing (bug reproduced).
+  AFTER: (a) `to=<bob@owned.lab>, relay=postfix-bridge[..]:2525 status=sent` and the API got `X-Envelope-From="alice@owned.lab" X-Envelope-To="bob@owned.lab"`;
+  (b) `to=<jp@ext.lab>, relay=mx.ext.lab[172.28.0.31]:25 status=sent`, sink saw MAIL FROM:<alice@owned.lab> over STARTTLS, bridge saw nothing;
+  (c) `to=<nobody@refuse.lab>, relay=mx.refuse.lab[..]:25, dsn=5.1.1, status=bounced (host mx.refuse.lab[172.28.0.32] said: 550 5.1.1 <nobody@refuse.lab>: Recipient
+  address rejected: User unknown in virtual mailbox table (in reply to RCPT TO command))`; a 450-at-RCPT MX defers (dsn=4.2.0) and, with a short maximal_queue_lifetime, expires
+  into a bounce (Action: failed, Status 4.2.0), with delay_warning_time an `Action: delayed` notice first (Postfix's default delay_warning_time is 0h: off);
+  (d) `qmgr: 54630198272: from=<>, size=3273, nrcpt=1` then `smtp: 54630198272: to=<alice@owned.lab>, relay=postfix-bridge[..]:2525, status=sent` - the DSN goes through
+  relay_transport to the bridge, and the API got `X-Envelope-From=""  X-Envelope-To="alice@owned.lab"`. A message to `bob@owned.lab, jp@ext.lab` is split correctly.
+- **The DSN a user gets** (and what the server's ingest must handle): MAIL FROM:<> (wire: `MAIL FROM:<> BODY=8BITMIME`), RCPT TO the original sender, `From: Mail Delivery System
+  <MAILER-DAEMON@<myhostname>>`, `Subject: Undelivered Mail Returned to Sender`, `Auto-Submitted: auto-replied`, multipart/report; report-type=delivery-status with the
+  human text (`<nobody@refuse.lab>: host mx.refuse.lab[172.28.0.32] said: 550 5.1.1 ...`), a message/delivery-status part (`Action: failed`, `Status: 5.1.1`,
+  `Diagnostic-Code: smtp; 550 5.1.1 ...`, `Final-Recipient`, `Original-Recipient`) and the original message as message/rfc822. It has no Return-Path and no DKIM signature
+  (Postfix generates it locally; nothing authenticates it), and `myhostname` is the From domain, which need not be a domain the server serves. Captured byte for byte
+  (what the bridge POSTs to /internal/mta/deliver) in `test/fixtures/dsn-unknown-recipient-550.eml`, `dsn-expired-450.eml`, `dsn-delayed-450.eml`, with the envelope in
+  `dsn-envelope.json` and the SMTP conversation in `dsn-unknown-recipient-550.smtp-session.txt`. `.gitattributes` marks `test/fixtures/*.eml -text` (CRLF must survive).
+- **Null sender through the bridge:** smtp-server accepts `MAIL FROM:<>` (`session.envelope.mailFrom === false`), `SmtpDeliveryServer` forwards `envelopeFrom = ""`, and
+  `MtaIngestClient.deliver` sends `X-Envelope-From: ` with an EMPTY value (real fetch to a real http server confirmed in a test and in the lab; the header is present, not
+  omitted). The earlier test only drove `handleData()` with a fake session; there are now wire-level tests with the fixtures, and one for the HTTP header. The server side
+  must treat the empty header as "null sender" (do not require it to be non-empty, and do not fall back to From:).
+- **Tests:** `test/routing.test.ts` reads postfix.yaml/docker-compose.yml/tls policy as text (no `POSTFIX_transport_maps`, relay_transport is `smtp:postfix-bridge:2525`, TLS
+  carve-out under the same key); it fails on the old config. Routing itself can only be proven against a real Postfix (the lab). `tsc -p tsconfig.test.json` has a pre-existing
+  error in TcpTableServer.ts (`temporary`), unrelated; `yarn tsc --noEmit` (the real config) is clean.
+- **Not done:** the compose stack itself wasn't run (its config validates with `docker compose config`; the same env change was proven in the lab); nothing changed in the server
+  repo. The Postfix pod's queue is not persistent (no volume), so flush it (`postqueue -f`) before the rollout restarts the pod.
+- **Lab pitfalls again:** Git Bash `$'\r'` inside `$( )` breaks the shell parse; use `MSYS_NO_PATHCONV=1` for every docker mount; unbound needs `local-zone: "lab." static` plus explicit
+  local-data; Docker's embedded DNS (127.0.0.11) answers the bare `postfix-bridge` for Postfix's own resolver too, so the search-domain bug from 2026-09-19 does NOT reproduce
+  in plain docker (it needs a cluster).

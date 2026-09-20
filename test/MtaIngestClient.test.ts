@@ -1,6 +1,9 @@
 ///////////////////////////////////////////////////////////////////////////////
 // Copyright (C) 2026 Jean-Philippe Steinmetz
 ///////////////////////////////////////////////////////////////////////////////
+import * as fs from "node:fs";
+import * as http from "node:http";
+import * as net from "node:net";
 import { MtaIngestClient } from "../src/MtaIngestClient.js";
 
 describe("MtaIngestClient Tests", () => {
@@ -92,6 +95,36 @@ describe("MtaIngestClient Tests", () => {
                     body: raw,
                 }),
             );
+        });
+
+        it("Sends a null sender (a bounce) as an empty X-Envelope-From header over real HTTP.", async () => {
+            // Real fetch against a real server: a mocked fetch can't show whether an empty header value survives the wire.
+            vi.unstubAllGlobals();
+            const seen: { from?: string | string[]; to?: string | string[]; length: number }[] = [];
+            const server = http.createServer((req, res) => {
+                const chunks: Buffer[] = [];
+                req.on("data", (c: Buffer) => chunks.push(c));
+                req.on("end", () => {
+                    seen.push({
+                        from: req.headers["x-envelope-from"],
+                        to: req.headers["x-envelope-to"],
+                        length: Buffer.concat(chunks).length,
+                    });
+                    res.writeHead(202).end();
+                });
+            });
+            await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+            try {
+                const port = (server.address() as net.AddressInfo).port;
+                const bounce = new MtaIngestClient(`http://127.0.0.1:${port}/internal/mta`, "s3cr3t");
+                const dsn = fs.readFileSync(new URL("./fixtures/dsn-unknown-recipient-550.eml", import.meta.url));
+
+                await bounce.deliver("", ["alice@owned.lab"], dsn);
+
+                expect(seen).toEqual([{ from: "", to: "alice@owned.lab", length: dsn.length }]);
+            } finally {
+                await new Promise((resolve) => server.close(resolve));
+            }
         });
 
         it("Throws with the response body on any status other than 202.", async () => {

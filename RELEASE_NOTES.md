@@ -1,5 +1,11 @@
 # Release Notes
 
+## Unreleased
+
+### Helm chart and docker-compose.yml
+
+* Fixed every message the RapidMX server sent to another organisation (a reply to an external address, for one) silently vanishing: Postfix routed it to postfix-bridge instead of delivering it, because `transport_maps = static:smtp:postfix-bridge:2525` matches every recipient. The postfix-bridge accepted it, Postfix logged `status=sent`, and the server's ingest then dropped it as an unresolvable recipient. Postfix now sets `relay_transport = smtp:postfix-bridge:2525` instead, so only the domains the server serves (`relay_domains`) go to postfix-bridge and everything else is delivered by MX lookup. A failed delivery to an external recipient now bounces to the sender with Postfix's full diagnostic (for example `host mx.example.net[192.0.2.1] said: 550 5.1.1 ...`), delivered to the sender's mailbox through postfix-bridge like any other message for a domain the server serves. Upgrading restarts the Postfix pod, and its queue is not persistent: flush it first (`postqueue -f`)
+
 ## v1.4.0
 
 ### Helm chart

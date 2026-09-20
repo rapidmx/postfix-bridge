@@ -26,7 +26,7 @@ yarn start
 | `MTA_INGEST_SECRET`        | Bearer secret authenticating this bridge's calls - must match that server's `mail__transport__ingest__secret` |
 | `MTA_BRIDGE_DOMAIN_PORT`   | `tcp_table` port for `relay_domains` (default `10040`)                  |
 | `MTA_BRIDGE_RECIPIENT_PORT`| `tcp_table` port for `relay_recipient_maps` (default `10041`)            |
-| `MTA_BRIDGE_SMTP_PORT`     | Plain SMTP port for `transport_maps` final delivery (default `2525`)     |
+| `MTA_BRIDGE_SMTP_PORT`     | Plain SMTP port for `relay_transport` final delivery (default `2525`)    |
 
 ## Deployment
 
@@ -71,6 +71,12 @@ start so this works with zero setup; replace the `postfix_tls` volume's `tls.crt
 certificate (e.g. Let's Encrypt) for anything beyond local evaluation. The one hop deliberately exempted
 from mandatory TLS is Postfix -> `postfix-bridge` (see `docker/postfix/tls_policy.txt`), since that's internal
 to the compose network and has no TLS support of its own by design.
+
+**Routing:** only recipients at domains `relay_domains` accepts (the domains the RapidMX server serves) are handed to
+`postfix-bridge`, through `relay_transport`. Everything else - the server's mail to other organisations - is delivered by
+MX lookup like any other Postfix, and a failed delivery bounces to the sender, whose mailbox is at a domain the server
+serves and so comes back through `postfix-bridge` as a message with a null envelope sender (`MAIL FROM:<>`). Don't use
+`transport_maps` for the bridge: a `static:` entry matches every recipient, external ones included.
 
 ### Kubernetes
 

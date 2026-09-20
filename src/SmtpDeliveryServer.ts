@@ -8,7 +8,7 @@ import { MtaIngestClient } from "./MtaIngestClient.js";
 
 /**
  * The final-delivery side of this bridge: a plain SMTP server Postfix relays already-accepted mail to
- * (via `transport_maps` - see docker-compose.yml) once its own recipient-validation checks
+ * (via `relay_transport` - see docker-compose.yml) once its own recipient-validation checks
  * (`TcpTableServer` + `MtaIngestClient.resolveRecipient()`) have already passed. Every message received
  * here is, by construction, already known-deliverable - this class's only job is to buffer the raw
  * message and hand the whole SMTP transaction off to `POST /internal/mta/deliver` in one call, matching
@@ -17,7 +17,7 @@ import { MtaIngestClient } from "./MtaIngestClient.js";
  * upstream call per recipient.
  *
  * No auth/TLS of its own - this listens only on the compose/cluster-internal network, reachable solely
- * from the deployment's own Postfix container (see docker-compose.yml's `transport_maps` wiring);
+ * from the deployment's own Postfix container (see docker-compose.yml's `relay_transport` wiring);
  * the internal bearer secret is enforced one hop later, by `MtaIngestClient`/`BaseMailIngestRoute` itself.
  *
  * @author Jean-Philippe Steinmetz

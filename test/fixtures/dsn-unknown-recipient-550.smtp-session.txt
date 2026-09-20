@@ -1,0 +1,101 @@
+S: 220 02bfc3e83f8c ESMTP
+C: EHLO mail.owned.lab
+S: 250-02bfc3e83f8c Nice to meet you, ip6-localhost
+S: 250-PIPELINING
+S: 250-8BITMIME
+S: 250 SMTPUTF8
+C: MAIL FROM:<> BODY=8BITMIME
+C: RCPT TO:<alice@owned.lab>
+C: DATA
+S: 250 Accepted
+S: 250 Accepted
+S: 354 End data with <CR><LF>.<CR><LF>
+C: Received: by mail.owned.lab (Postfix)
+C: 	id 54630198272; Sun, 20 Sep 2026 07:30:05 +0000 (UTC)
+C: Date: Sun, 20 Sep 2026 07:30:05 +0000 (UTC)
+C: From: Mail Delivery System <MAILER-DAEMON@mail.owned.lab>
+C: Subject: Undelivered Mail Returned to Sender
+C: To: alice@owned.lab
+C: Auto-Submitted: auto-replied
+C: MIME-Version: 1.0
+C: Content-Type: multipart/report; report-type=delivery-status;
+C: 	boundary="13FE31984A4.1789889405/mail.owned.lab"
+C: Content-Transfer-Encoding: 8bit
+C: Message-Id: <20260920073005.54630198272@mail.owned.lab>
+C: 
+C: This is a MIME-encapsulated message.
+C: 
+C: --13FE31984A4.1789889405/mail.owned.lab
+C: Content-Description: Notification
+C: Content-Type: text/plain; charset=utf-8
+C: Content-Transfer-Encoding: 8bit
+C: 
+C: This is the mail system at host mail.owned.lab.
+C: 
+C: I'm sorry to have to inform you that your message could not
+C: be delivered to one or more recipients. It's attached below.
+C: 
+C: For further assistance, please send mail to postmaster.
+C: 
+C: If you do so, please include this problem report. You can
+C: delete your own text from the attached returned message.
+C: 
+C:                    The mail system
+C: 
+C: <nobody@refuse.lab>: host mx.refuse.lab[172.28.0.32] said: 550 5.1.1
+C:     <nobody@refuse.lab>: Recipient address rejected: User unknown in virtual
+C:     mailbox table (in reply to RCPT TO command)
+C: 
+C: --13FE31984A4.1789889405/mail.owned.lab
+C: Content-Description: Delivery report
+C: Content-Type: message/delivery-status
+C: 
+C: Reporting-MTA: dns; mail.owned.lab
+C: X-Postfix-Queue-ID: 13FE31984A4
+C: X-Postfix-Sender: rfc822; alice@owned.lab
+C: Arrival-Date: Sun, 20 Sep 2026 07:30:05 +0000 (UTC)
+C: 
+C: Final-Recipient: rfc822; nobody@refuse.lab
+C: Original-Recipient: rfc822;nobody@refuse.lab
+C: Action: failed
+C: Status: 5.1.1
+C: Remote-MTA: dns; mx.refuse.lab
+C: Diagnostic-Code: smtp; 550 5.1.1 <nobody@refuse.lab>: Recipient address
+C:     rejected: User unknown in virtual mailbox table
+C: 
+C: --13FE31984A4.1789889405/mail.owned.lab
+C: Content-Description: Undelivered Message
+C: Content-Type: message/rfc822
+C: Content-Transfer-Encoding: 8bit
+C: 
+C: Return-Path: <alice@owned.lab>
+C: DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=owned.lab; s=mail;
+C: 	t=1789889405; bh=6ZuULLuDIMnWQ9NHmpJfD5PaGQNrxauIMQNdO5bpoCw=;
+C: 	h=From:To:Subject:Message-ID:Date:MIME-Version:Content-Type:From:
+C: 	 Sender:To:CC:Subject:Message-Id:Date:MIME-Version:Content-Type:
+C: 	 Reply-To;
+C: 	b=c+PLZGLIZlk0RtozTozOhIqVrBYk51nDGtXuVfGRmRrSgmEJOwNiuVnBTSwdPtXpU
+C: 	 5y1orh/g9bosf8HrqGNwbNNsWg63eK9RDrx3XSfl7HvVIW9X0/BYsqR5g2iVfi3qU2
+C: 	 prvkftpJaHqq/YO/9fdlMTyfmzh9JQuEu5w7fFi7C425XJ61fDgyzMJmGSVBNaA6V4
+C: 	 qYUOSv6WAsmli+tut/SfkAB+8XQxBfh9tTTRQzgacJhKlXNvaN3WMRF/wZyADDrFon
+C: 	 Hlvw2Dm8KKqRVRF8x5SZ5hqTiFd2vHTmlKJ+8ezIh26Cjyp1nFTFmIm4U1wTGkORMH
+C: 	 pPyls19fylzBg==
+C: Received: from [127.0.0.1] (romantic_davinci.pfxlab [172.28.0.20])
+C: 	by mail.owned.lab (Postfix) with ESMTP id 13FE31984A4
+C: 	for <nobody@refuse.lab>; Sun, 20 Sep 2026 07:30:05 +0000 (UTC)
+C: From: alice@owned.lab
+C: To: nobody@refuse.lab
+C: Subject: after-c-refused
+C: Message-ID: <6ffffb17-1dc0-a0c6-0ab8-173f954579ce@owned.lab>
+C: Content-Transfer-Encoding: 7bit
+C: Date: Sun, 20 Sep 2026 07:30:05 +0000
+C: MIME-Version: 1.0
+C: Content-Type: text/plain; charset=utf-8
+C: 
+C: Lab message after-c-refused
+C: 
+C: --13FE31984A4.1789889405/mail.owned.lab--
+C: .
+C: QUIT
+S: 250 OK: message queued
+S: 221 Bye

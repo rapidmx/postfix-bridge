@@ -44,7 +44,8 @@ const recipientServer: TcpTableServer = new TcpTableServer(async (address) => {
     return found ? { found: true, value: address } : { found: false };
 });
 
-// `transport_maps = static:smtp:postfix-bridge:<smtpPort>` - every accepted message's actual delivery hop.
+// `relay_transport = smtp:postfix-bridge:<smtpPort>` - the delivery hop for everything relay_domains accepted, and only
+// that: a `static:` transport_maps entry would send every recipient here, external addresses included.
 const smtpServer: SmtpDeliveryServer = new SmtpDeliveryServer(client);
 
 async function start(): Promise<void> {

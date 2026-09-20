@@ -1,7 +1,7 @@
 services:
     # Translates Postfix's own protocols (tcp_table lookups, plain SMTP) into calls against the RapidMX
     # server's `/internal/mta` contract - see src/index.ts's own doc comment, and the `postfix` service
-    # below for how Postfix is pointed at it (relay_domains/relay_recipient_maps/transport_maps).
+    # below for how Postfix is pointed at it (relay_domains/relay_recipient_maps/relay_transport).
     postfix-bridge:
         image: rapidmx-postfix-bridge:local
         build:
@@ -77,7 +77,10 @@ services:
             # which hands it to `POST /internal/mta/deliver`.
             - POSTFIX_relay_domains=tcp:postfix-bridge:10040
             - POSTFIX_relay_recipient_maps=tcp:postfix-bridge:10041
-            - POSTFIX_transport_maps=static:smtp:postfix-bridge:2525
+            # relay_transport, not transport_maps: only relay_domains destinations (the domains the RapidMX server serves) go to
+            # postfix-bridge; every other recipient is delivered by the usual MX lookup. A static transport_maps entry matches
+            # EVERY recipient and would hand mail for external addresses to postfix-bridge, which drops it.
+            - POSTFIX_relay_transport=smtp:postfix-bridge:2525
             # Mandatory TLS, both directions - see this service's own comment above for why "encrypt" (not
             # the image's opportunistic "may" default) is deliberate here.
             - POSTFIX_smtpd_tls_security_level=encrypt

@@ -2,7 +2,7 @@
 # The MTA - see docker-compose.yml for the equivalent docker-compose wiring this mirrors, including
 # the DKIM/DMARC and inbound-routing design notes repeated there. INBOUND recipient/domain acceptance and
 # final delivery route through the postfix-bridge Service below (relay_domains/relay_recipient_maps/
-# transport_maps), which translates Postfix's own tcp_table/SMTP protocols into calls against the main
+# relay_transport), which translates Postfix's own tcp_table/SMTP protocols into calls against the main
 # service's /internal/mta contract - see src/index.ts's own doc comment. OUTBOUND mail from the
 # main service Deployment reaches this container over plain SMTP on port 25 (see that Deployment's own
 # SENDMAIL_RELAY_HOST env var, defaulting to the "postfix" Service name this file also creates).
@@ -101,8 +101,13 @@ spec:
               value: tcp:postfix-bridge:10040
             - name: POSTFIX_relay_recipient_maps
               value: tcp:postfix-bridge:10041
-            - name: POSTFIX_transport_maps
-              value: static:smtp:postfix-bridge:2525
+            # ONLY the relay_domains destinations - the domains the main service serves, replies and bounces to its own users
+            # included - go to postfix-bridge. Everything else, i.e. every message the main service sends to another
+            # organisation, is delivered by the usual MX lookup (default_transport). Do NOT use transport_maps for this
+            # (`static:smtp:postfix-bridge:2525` did): a static map matches every recipient, so mail for an external address was
+            # handed to postfix-bridge, reported as sent, then dropped by the ingest as an unresolvable recipient.
+            - name: POSTFIX_relay_transport
+              value: smtp:postfix-bridge:2525
             # Postfix's own DNS client doesn't apply the pod's search domains, so it can't find the bare Service name above
             # ("Host or domain name not found ... name=postfix-bridge type=AAAA") and bounces everything it accepts. Falling
             # back to the system resolver, which does, fixes that; the tcp_table lookups already use it.
