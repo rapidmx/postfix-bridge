@@ -46,3 +46,89 @@ data:
       sed -i -E '/^[[:space:]]*#?[[:space:]]*InternalHosts/d' /etc/opendkim/opendkim.conf
       printf 'InternalHosts           %s\n' "$POSTFIX_mynetworks" >> /etc/opendkim/opendkim.conf
     fi
+
+    # Run the watcher (dkim-sync.sh) beside OpenDKIM, under the image's own supervisord, so it is restarted if it ever stops.
+    if ! grep -q '^\[program:dkim-sync\]' /etc/supervisord.conf; then
+      cat >> /etc/supervisord.conf << 'EOF'
+
+    [program:dkim-sync]
+    command         = /bin/bash /opt/postfix-bridge/dkim-sync.sh
+    autostart       = true
+    autorestart     = true
+    startsecs       = 0
+    stdout_logfile  = /dev/stdout
+    stderr_logfile  = /dev/stderr
+    stdout_logfile_maxbytes = 0
+    stderr_logfile_maxbytes = 0
+    EOF
+    fi
+  # Tables chained by postfix.yaml's internal_sender_check (pipemap:{sender_domain, postfix-bridge, any_ok}) to ask the main
+  # service whether it serves a sender's domain: sender_domain turns user@domain into domain - Postfix does a single lookup of the
+  # whole address for a chain containing a pattern table, never the domain on its own - postfix-bridge answers with the domain
+  # when the main service serves it, and any_ok turns that hit into OK.
+  sender_domain: |
+    /^[^@]+@(.+)$/    ${1}
+  any_ok: |
+    /./    OK
+  # Run by supervisord (opendkim.sh adds it): see the script's own comment.
+  dkim-sync.sh: |
+    #!/bin/bash
+    # Keeps OpenDKIM in step with the domains the main service registers, so a domain added in the admin console signs its mail
+    # without restarting Postfix or upgrading the release. The main service writes each domain's DKIM private key to
+    # $DKIM_SOURCE_DIR/<domain>.<selector>.key the moment the domain is created (and that key is what the console tells you to
+    # publish in DNS). The image, though, reads /etc/opendkim/keys/<domain>.private and lists domains in its KeyTable and
+    # SigningTable only when it starts. Every $DKIM_SYNC_INTERVAL seconds this copies any new or changed key to where the image
+    # looks, rebuilds both tables from the keys present, and, if anything changed, asks OpenDKIM to reload them.
+    SRC=${DKIM_SOURCE_DIR:-/var/lib/rspamd/dkim}
+    KEYS=/etc/opendkim/keys
+    SEL=${DKIM_SELECTOR:-mail}
+    INTERVAL=${DKIM_SYNC_INTERVAL:-10}
+
+    reload() {
+      # OpenDKIM re-reads its tables on SIGUSR1; not running yet (it starts a few seconds after this) is fine, it reads them then.
+      pkill -USR1 -x opendkim >/dev/null 2>&1
+      echo "Asked OpenDKIM to reload its keys"
+    }
+
+    sync() {
+      local changed=0 f d dst k keytable signing
+      for f in "$SRC"/*."$SEL".key; do
+        [ -f "$f" ] || continue
+        d=$(basename "$f" ".$SEL.key")
+        # A host name only: this becomes a file name and a line in OpenDKIM's tables.
+        [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || continue
+        # Not yet fully written, or not a key at all: try again next time.
+        openssl pkey -in "$f" -noout >/dev/null 2>&1 || continue
+        dst="$KEYS/$d.private"
+        if ! cmp -s "$f" "$dst"; then
+          if install -o opendkim -g opendkim -m 0400 "$f" "$dst"; then
+            echo "Using the main service's DKIM key for $d"
+            rm -f "$KEYS/$d.txt"
+            changed=1
+          fi
+        fi
+      done
+      keytable=$(mktemp)
+      signing=$(mktemp)
+      for k in "$KEYS"/*.private; do
+        [ -f "$k" ] || continue
+        d=$(basename "$k" .private)
+        echo "$SEL._domainkey.$d $d:$SEL:$k" >> "$keytable"
+        echo "*@$d $SEL._domainkey.$d" >> "$signing"
+      done
+      if ! cmp -s "$keytable" /etc/opendkim/KeyTable || ! cmp -s "$signing" /etc/opendkim/SigningTable; then
+        cat "$keytable" > /etc/opendkim/KeyTable
+        cat "$signing" > /etc/opendkim/SigningTable
+        changed=1
+      fi
+      rm -f "$keytable" "$signing"
+      if [ "$changed" = 1 ]; then
+        reload
+      fi
+    }
+
+    echo "Watching $SRC for DKIM keys (selector $SEL) every $INTERVAL seconds"
+    while true; do
+      sync
+      sleep "$INTERVAL"
+    done

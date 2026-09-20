@@ -98,6 +98,10 @@ Installed on its own, set:
 - `tls.existingSecret` to use your own certificate, or `tls.certManager.enabled=false` to self-sign one for a public
   hostname when cert-manager (with the `letsencrypt-prod` ClusterIssuer, `tls.certManager.issuerName`) isn't available.
 
+Domains are the main service's to manage: add one in its admin console and Postfix accepts mail for it, lets the main service
+send as it, and signs its mail with the DKIM key the console shows - within `dkim.syncIntervalSeconds` (default 10), with nothing to
+restart or upgrade. `domains` is only the set Postfix knows when it starts. Removing a domain in the console stops it sending at once.
+
 Port 25 is both the MX and the cluster's outbound relay, so Postfix has to tell the two apart by the client's address:
 clients in `postfix.internalNetworks` (default: the private ranges, i.e. the pod and node networks) may relay to anywhere in
 plaintext, as one of `domains`; everyone else must use TLS and may only send to a domain the server accepts. That only holds if

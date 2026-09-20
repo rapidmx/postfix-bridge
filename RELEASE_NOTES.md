@@ -4,6 +4,8 @@
 
 ### Helm chart
 
+* **Domains added in the main service's admin console work at once, with no restart, no upgrade and no change to `domains`:** the right to send is asked of the main service (through the existing postfix-bridge domain lookup) for each message, and a small watcher (`dkim-sync.sh`, run by the image's own supervisord) copies each domain's DKIM key from the shared volume to where OpenDKIM reads it, rebuilds its key and signing tables and asks it to reload, within `dkim.syncIntervalSeconds` (default 10). A key the main service replaces is picked up the same way, and a domain removed there stops sending at once. `domains` is now only the set Postfix knows when it starts, so they may send while the main service is down
+* Fixed the first domain's DKIM key never matching what the console tells you to publish until Postfix was restarted: Postfix signed with a key the image had generated, and only used the main service's after a restart
 * Fixed OpenDKIM never verifying a signature, so no inbound `Authentication-Results` result was ever stamped: its key lookups through the container's resolver fail with `unexpected reply class/type (-1/-1)` unless it is told which name server to ask, so an init script points it at the pod's resolver
 * Fixed anyone who could reach port 25 getting their mail signed as one of your domains: the image lists every address as OpenDKIM's internal hosts, so a message from the internet with a forged `From:` of your domain came back with your genuine DKIM signature; only `postfix.internalNetworks` are internal now
 

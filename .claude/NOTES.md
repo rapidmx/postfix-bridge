@@ -192,3 +192,27 @@ mail-tls-policy ConfigMap, mounted at `/docker-init.d/opendkim.sh` (the image ru
   (comma CIDR list, valid OpenDKIM syntax; the image's own `OPENDKIM_*` env hook can't carry it: it edits the file with sed using `/` as the delimiter).
 - Lab notes: `.test`/`.example` names are special-use in unbound and never reach DNS; dnsmasq's replies also failed until swapped for unbound. Not done: SPF/DMARC
   verification (OpenDKIM only does DKIM), no compose change.
+
+### 2026-09-20 - domains added in the admin console need no restart, redeploy or helm upgrade
+
+Before: the sender allow-list (ALLOWED_SENDER_DOMAINS) and OpenDKIM's key/signing tables were built once at start, so a new domain could not send, and
+the first domain signed with a key nobody had published, until Postfix was restarted (and its domain added to `domains`). Now both follow the main service.
+Built and proven in a docker lab that runs the chart's own rendered env/ConfigMap files with the *published* bridge image, a fake server API whose domain list
+changes live, and unbound holding the test DKIM keys (14/14 checks), then on a real k3s host (key in OpenDKIM 8 s after `POST /api/mail/domains`, no pod restart).
+- **Sender check:** `internal_sender_check` = static allowed_senders, then `check_sender_access pipemap:{regexp:sender_domain, tcp:postfix-bridge:10040, regexp:any_ok}`.
+  The three stages: user@domain -> domain, the bridge's existing domain lookup (200 with the domain when the main service serves it), any hit -> OK.
+  Gotchas found the hard way: a chain containing a pattern table (`regexp:`) makes Postfix do ONE lookup with the whole address and never the bare domain
+  (`postconf`/debug_peer_list showed "skipping ... lookup for" the partial keys), which is why the domain has to be extracted inside the chain; and
+  `postmap -q` does not reproduce smtpd's key handling, only smtpd with `debug_peer_list` does. Needs no bridge change or new image.
+- **DKIM:** `dkim-sync.sh` (ConfigMap, mounted at /opt/postfix-bridge, started by appending a `[program:dkim-sync]` to /etc/supervisord.conf from the init script so
+  supervisord restarts it) polls /var/lib/rspamd/dkim every 10 s, installs any *valid* new/changed key (`openssl pkey` guard: a half-written or empty file is skipped -
+  the lab caught a test that "rotated" a key to an empty file and OpenDKIM correctly kept the old one), rebuilds KeyTable/SigningTable from /etc/opendkim/keys/*.private
+  and sends SIGUSR1 ("configuration reloaded"); SIGUSR1 also makes OpenDKIM re-read a replaced key file (rotation verified).
+- **Behaviour to know:** the server is the one sending, so with it down no outbound recipient can be classified (relay_domains lookup fails) and every send gets a
+  temporary 451 - deferred, retryable, never lost; the static list does not help there. A domain becomes sendable when the main service reports it enabled AND verified
+  (a new domain's key exists first, so a first message is signed unless verification lands inside the sync interval). Reserved TLDs (.invalid, .local, ...) are auto-verified
+  by the server by design. Subdomain senders of a dynamic domain are not allowed (only the exact domain); the static list still matches parents.
+- **Not done:** no compose change (compose keeps the old static behaviour); on the real host the delivery leg of the signing test could not be run with a throwaway domain
+  (Postfix's reject_unknown_recipient_domain needs the recipient domain in public DNS, and a real domain needs real DNS verification) - do it when a real domain is registered.
+- **Lab pitfalls:** writing a file for a bind mount on Docker-for-Windows via truncate+write can be seen empty in the container; Windows-written files get CRLF (a CRLF `resolv.conf`
+  silently disables glibc's nameserver line); Git Bash rewrites `/path` docker args; unbound treats `.test`/`.example` as special-use.

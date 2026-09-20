@@ -16,7 +16,7 @@
 # and so is any sender outside ALLOWED_SENDER_DOMAINS), which can't receive mail from the internet. This makes it an MX
 # that is also the cluster's outbound relay:
 #   - a client inside `postfix.internalNetworks` (the main service Deployment) may relay to anywhere, in plaintext, but
-#     only as one of ALLOWED_SENDER_DOMAINS (the internal_sender_check class below);
+#     only as one of ALLOWED_SENDER_DOMAINS or a domain the main service serves (the internal_sender_check class below);
 #   - anyone else must use TLS (reject_plaintext_session), and may only send to a domain relay_domains accepts - never
 #     relay - from any sender address.
 # That split relies on Postfix seeing the client's REAL address: a load balancer that masks it behind an address in
@@ -41,8 +41,8 @@ spec:
         # the file is missing (DKIM_AUTOGENERATE) - but the key published in DNS (the DNS-setup page) is the one the main
         # service writes to /var/lib/rspamd/dkim/<domain>.<selector>.key. Left alone, Postfix signs with a key nobody
         # published and every DKIM check fails. So the server's key is copied to where the image looks, before it starts;
-        # the image then keeps it ("Will not overwrite"). A domain added later is picked up on the next start, which
-        # adding it to `domains` needs anyway.
+        # the image then keeps it ("Will not overwrite"). A domain added (or a key replaced) while Postfix runs is picked up
+        # by dkim-sync.sh, so this only matters for the first seconds after a start.
         - name: dkim-keys-sync
           image: {{ $.Values.postfix.image.registry }}/{{ $.Values.postfix.image.repository }}:{{ $.Values.postfix.image.tag }}
           command:
@@ -68,9 +68,11 @@ spec:
         - name: postfix
           image: {{ $.Values.postfix.image.registry }}/{{ $.Values.postfix.image.repository }}:{{ $.Values.postfix.image.tag }}
           env:
-            # Comma-separated domains this Postfix instance accepts/relays OUTBOUND submissions for -
-            # keep in sync with the Domains added via the admin console. Independent of INBOUND
-            # acceptance, which postfix-bridge backs dynamically from this app's own Domain database.
+            # The domains this Postfix knows when it starts: they may send even while the main service is down, and get a DKIM key
+            # generated here if the main service hasn't made one. It is NOT the list of domains: every domain the main service
+            # serves is picked up while running - inbound acceptance through postfix-bridge, the right to send through
+            # internal_sender_check below, and its DKIM key through dkim-sync.sh (mail-tls-policy.yaml) - so a domain added in the
+            # admin console needs no change here, no restart and no upgrade.
             - name: ALLOWED_SENDER_DOMAINS
               # The image splits this on whitespace, not commas.
               value: {{ tpl ($.Values.domains | toString) $ | replace "," " " | trim | quote }}
@@ -79,18 +81,17 @@ spec:
             # match the presented certificate is a common deliverability red flag with receiving providers.
             - name: POSTFIX_myhostname
               value: {{ include "postfixBridge.hostname" $ | quote }}
-            # rspamd (this image's bundled DKIM backend since v6, distinct from the standalone rspamd
-            # Deployment used only for spam scoring - see rspamd.yaml) signs outbound mail using whatever
-            # key file it finds at /var/lib/rspamd/dkim/<domain>.<selector>.key. In this deployment that
-            # file is normally already there by the time a domain is added to ALLOWED_SENDER_DOMAINS
-            # above - the main service Deployment's own FsDkimKeyProvider writes it the moment a Domain is
-            # created (or, for one added before that provider existed, the first time its DNS-setup page
-            # is opened). DKIM_AUTOGENERATE is kept as a fallback safety net for a domain added here
-            # without a corresponding Domain record.
+            # This image signs with OpenDKIM, using /etc/opendkim/keys/<domain>.private. The key that matters is the one the
+            # main service writes to /var/lib/rspamd/dkim/<domain>.<selector>.key the moment a Domain is created - the one its
+            # DNS-setup page tells you to publish - which the dkim-keys-sync init container and dkim-sync.sh put there.
+            # DKIM_AUTOGENERATE only makes a key for a domain in ALLOWED_SENDER_DOMAINS the main service hasn't made one for yet.
             - name: DKIM_AUTOGENERATE
               value: {{ $.Values.dkim.autogenerate | quote }}
             - name: DKIM_SELECTOR
               value: {{ $.Values.dkim.selector | quote }}
+            # How often dkim-sync.sh (mail-tls-policy.yaml) looks for keys the main service has written for new domains.
+            - name: DKIM_SYNC_INTERVAL
+              value: {{ $.Values.dkim.syncIntervalSeconds | quote }}
             # Inbound recipient/domain acceptance - both back this deployment's own Domain/mailbox
             # database dynamically via the postfix-bridge Service's tcp_table listeners, so a domain/mailbox
             # added through the admin console is accepted here with no Postfix restart needed. Final
@@ -120,12 +121,14 @@ spec:
               value: permit_mynetworks, reject_unauth_destination
             - name: POSTFIX_smtpd_sender_restrictions
               value: reject_non_fqdn_sender
-            # An internal client's sender must be one of ALLOWED_SENDER_DOMAINS (the image builds that map from it, and
-            # it answers OK for those). internal_clients (mail-tls-policy.yaml) maps each internal network to this class.
+            # An internal client's sender must be one of ALLOWED_SENDER_DOMAINS (the image builds that map from it, and it
+            # answers OK for those, even with the main service down) or a domain the main service serves - asked of postfix-bridge
+            # for each message, so a domain added in the admin console may send at once. internal_clients (mail-tls-policy.yaml)
+            # maps each internal network to this class.
             - name: POSTFIX_smtpd_restriction_classes
               value: internal_sender_check
             - name: POSTFIX_internal_sender_check
-              value: check_sender_access lmdb:/etc/postfix/allowed_senders, reject
+              value: check_sender_access lmdb:/etc/postfix/allowed_senders, check_sender_access pipemap:{regexp:/etc/postfix/sender_domain, tcp:postfix-bridge:10040, regexp:/etc/postfix/any_ok}, reject
             - name: POSTFIX_smtpd_recipient_restrictions
               value: reject_non_fqdn_recipient, reject_unknown_recipient_domain, check_client_access cidr:/etc/postfix/internal_clients, reject_unauth_destination
             - name: POSTFIX_smtpd_tls_cert_file
@@ -171,6 +174,18 @@ spec:
             - name: mail-tls-policy
               mountPath: /docker-init.d/opendkim.sh
               subPath: opendkim.sh
+              readOnly: true
+            - name: mail-tls-policy
+              mountPath: /etc/postfix/sender_domain
+              subPath: sender_domain
+              readOnly: true
+            - name: mail-tls-policy
+              mountPath: /etc/postfix/any_ok
+              subPath: any_ok
+              readOnly: true
+            - name: mail-tls-policy
+              mountPath: /opt/postfix-bridge/dkim-sync.sh
+              subPath: dkim-sync.sh
               readOnly: true
       volumes:
         - name: dkim-keys
