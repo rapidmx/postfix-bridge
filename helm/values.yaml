@@ -5,9 +5,6 @@ ingestSecretRef:
   name: ''
   key: mail__transport__ingest__secret
 ingestBaseUrl: http://server-services/internal/mta
-# The domains Postfix knows when it starts: they may send while the main service is down, and get a DKIM key made here if the main
-# service hasn't made one. Not the list of domains - every domain the main service serves (added in its admin console) is picked
-# up while Postfix runs, for receiving, sending and signing. Comma-separated. May be a template.
 domains: example.com
 hostname: mail.localhost
 tls:
@@ -18,8 +15,6 @@ tls:
     issuerKind: ClusterIssuer
 dkim:
   selector: mail
-  # Seconds between looks for the keys the main service writes for domains added after Postfix started, which are then used
-  # without restarting anything.
   syncIntervalSeconds: 10
   autogenerate: true
   storage:
@@ -49,7 +44,7 @@ service:
   image:
     registry: ghcr.io
     repository: rapidmx/postfix-bridge
-    tag: 1.3.0
+    tag: 1.4.0
   resources:
     requests:
       cpu: 50m

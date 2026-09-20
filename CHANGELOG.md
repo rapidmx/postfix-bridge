@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-20
+
+### Added
+- Added dkim-sync.sh, run by the image's own supervisord, which copies each valid DKIM key the main service writes to the shared volume to where OpenDKIM reads it, rebuilds its key and signing tables and reloads it every dkim.syncIntervalSeconds, so a new domain signs with the key the console shows and a replaced key is picked up
+
+### Changed
+- Document the fixes in the release notes and NOTES
+- Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+- Let a domain added in the main service's admin console send at once, with no restart, upgrade or change to domains, by asking the main service through postfix-bridge's existing domain lookup whether it serves an internal client's sender domain, chained after the static allowed_senders list with pipemap since Postfix does a single whole-address lookup for a chain that contains a pattern table
+- Document that domains is only the set Postfix knows when it starts, and correct the chart comments that described the image's DKIM backend as rspamd and domains as a list to keep in sync with the console
+- Document the changes in the README, the release notes and NOTES
+- Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Fixed
+- Fixed OpenDKIM never verifying a signature, so no inbound Authentication-Results result was ever stamped, by pointing it at the pod's name server with an init script, since its key lookups through the container's resolver fail with "unexpected reply class/type (-1/-1)" otherwise
+- Fixed anyone who could reach port 25 getting their mail signed as one of the allowed sender domains by making only postfix.internalNetworks OpenDKIM's internal hosts, where the image treated every address as internal
+- Fixed the first domain signing with a key the image generated, not the one the console tells you to publish, until Postfix was restarted
+
 ## [1.3.0] - 2026-09-19
 
 ### Fixed
@@ -60,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed @rapidrest/cli as a dep
 
-[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.0.0...v1.1.0
