@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-20
+
+### Changed
+- Correct the comments and the README that described the routing as transport_maps
+- Test the routing, and delivery status notifications captured from a real Postfix, with a null envelope sender, replayed over SMTP and posted to the server with an empty X-Envelope-From
+- Document the fix in the README, the release notes and NOTES, including how to roll it out
+- Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+
+### Fixed
+- Fixed mail for external recipients being delivered to postfix-bridge, and dropped by the server, by sending only relay_domains there with relay_transport instead of a static transport_maps that matched every recipient
+
 ## [1.4.0] - 2026-09-20
 
 ### Added
@@ -78,7 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed @rapidrest/cli as a dep
 
-[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.1.0...v1.2.0

@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## v1.4.1
 
 ### Helm chart and docker-compose.yml
 

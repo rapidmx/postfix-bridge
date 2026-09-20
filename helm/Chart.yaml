@@ -7,4 +7,4 @@ description: >-
   datastores, and spam/AV scanning.
 name: postfix-bridge
 version: 0.1.0
-appVersion: 1.4.0
+appVersion: 1.4.1
