@@ -35,6 +35,13 @@ function encodeTcpTableValue(value: string): string {
  * listeners. */
 export const DEFAULT_CLOSE_TIMEOUT_MS = 30_000;
 
+/** Default cap (UTF-8 code units) on one connection's buffered-but-not-yet-newline-terminated
+ * `tcp_table(5)` request line - see the constructor's `maxLineLength` doc for why this exists. Generous
+ * relative to any real Postfix `get <key>` request (a percent-encoded email address is at most a few
+ * hundred bytes) while still bounding how much an adversarial or misbehaving client can make this
+ * connection buffer before ever sending a `\n`. */
+export const DEFAULT_MAX_LINE_LENGTH = 8192;
+
 /**
  * A minimal server for Postfix's `tcp_table(5)` lookup protocol - the mechanism this deployment's Postfix
  * `main.cf` uses (via `relay_domains`/`relay_recipient_maps`, see docker-compose.yml) to consult this
@@ -74,6 +81,16 @@ export class TcpTableServer {
          * instead of a clean drain. Contrast `SmtpDeliveryServer`'s underlying `smtp-server` library, which
          * already force-destroys pending connections after its own 30s timeout. */
         private readonly closeTimeoutMs: number = DEFAULT_CLOSE_TIMEOUT_MS,
+        /** `handleConnection()` destroys a connection outright once its buffered-but-not-yet-terminated
+         * line exceeds this many characters, rather than letting `buffer += chunk` grow without limit. This
+         * is the same class of bug `SmtpDeliveryServer`'s `maxMessageSize`/`sizeExceeded` guard closes on
+         * the SMTP side, but with a worse blast radius here: `handleConnection()`'s `"data"` handler is
+         * synchronous and outside any `try`/`catch`, so a client that never sends a `\n` (or sends one
+         * extremely long line) either grows this process's memory without bound - taking down both
+         * `TcpTableServer` listeners and the SMTP listener with it, not just one connection - or, if V8's
+         * string-length ceiling is hit first, throws an uncaught `RangeError` that crashes the entire
+         * process. */
+        private readonly maxLineLength: number = DEFAULT_MAX_LINE_LENGTH,
     ) {
         this.server = net.createServer((socket) => this.handleConnection(socket));
     }
@@ -124,6 +141,15 @@ export class TcpTableServer {
                 const line: string = buffer.slice(0, newlineIndex).replace(/\r$/, "");
                 buffer = buffer.slice(newlineIndex + 1);
                 queue = queue.then(() => this.handleLine(socket, line));
+            }
+            // Checked *after* draining every complete line above, so a burst of legitimate pipelined
+            // requests followed by a not-yet-terminated one is still processed normally - only whatever's
+            // left over (a single line that itself has grown past the cap with no "\n" in sight yet) trips
+            // this. No response is written first: the framing can't be trusted once a line has grown this
+            // large, so this drops the connection outright rather than risk writing into the middle of
+            // whatever the client is still sending.
+            if (buffer.length > this.maxLineLength) {
+                socket.destroy();
             }
         });
         socket.on("error", () => {

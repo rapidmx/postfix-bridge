@@ -28,19 +28,44 @@ const mockMtaIngestClient = vi.fn(function (
 vi.mock("../src/MtaIngestClient.js", () => ({ MtaIngestClient: mockMtaIngestClient, DEFAULT_MTA_INGEST_TIMEOUT_MS: 10_000 }));
 
 let mockDomainListenShouldFail = false;
-const mockTcpTableServerInstances: Array<{ lookup: (key: string) => unknown; listen: unknown; close: unknown }> = [];
-const mockTcpTableServer = vi.fn(function (this: Record<string, unknown>, lookup: (key: string) => unknown) {
+const mockTcpTableServerInstances: Array<{
+    lookup: (key: string) => unknown;
+    closeTimeoutMs: unknown;
+    maxLineLength: unknown;
+    listen: unknown;
+    close: unknown;
+}> = [];
+const mockTcpTableServer = vi.fn(function (
+    this: Record<string, unknown>,
+    lookup: (key: string) => unknown,
+    closeTimeoutMs: unknown,
+    maxLineLength: unknown,
+) {
     this.lookup = lookup;
+    this.closeTimeoutMs = closeTimeoutMs;
+    this.maxLineLength = maxLineLength;
     const isDomainServer = mockTcpTableServerInstances.length === 0;
     this.listen =
         isDomainServer && mockDomainListenShouldFail
             ? vi.fn().mockRejectedValue(new Error("EADDRINUSE"))
             : vi.fn().mockResolvedValue(10040);
     this.close = vi.fn().mockResolvedValue(undefined);
-    mockTcpTableServerInstances.push(this as unknown as { lookup: (key: string) => unknown; listen: unknown; close: unknown });
+    mockTcpTableServerInstances.push(
+        this as unknown as {
+            lookup: (key: string) => unknown;
+            closeTimeoutMs: unknown;
+            maxLineLength: unknown;
+            listen: unknown;
+            close: unknown;
+        },
+    );
 });
 
-vi.mock("../src/TcpTableServer.js", () => ({ TcpTableServer: mockTcpTableServer }));
+vi.mock("../src/TcpTableServer.js", () => ({
+    TcpTableServer: mockTcpTableServer,
+    DEFAULT_CLOSE_TIMEOUT_MS: 30_000,
+    DEFAULT_MAX_LINE_LENGTH: 8192,
+}));
 
 const mockSmtpDeliveryServerInstances: Array<{
     client: unknown;
@@ -79,6 +104,7 @@ describe("index", () => {
         delete process.env.MTA_BRIDGE_SMTP_PORT;
         delete process.env.MTA_INGEST_TIMEOUT_MS;
         delete process.env.MTA_BRIDGE_MAX_MESSAGE_SIZE;
+        delete process.env.MTA_BRIDGE_MAX_LINE_LENGTH;
         process.env.MTA_INGEST_SECRET = "test-secret";
 
         mockDomainListenShouldFail = false;
@@ -121,6 +147,10 @@ describe("index", () => {
         ["MTA_INGEST_TIMEOUT_MS", ""],
         ["MTA_INGEST_TIMEOUT_MS", "0"],
         ["MTA_INGEST_TIMEOUT_MS", "-1"],
+        ["MTA_BRIDGE_MAX_LINE_LENGTH", "not-a-number"],
+        ["MTA_BRIDGE_MAX_LINE_LENGTH", ""],
+        ["MTA_BRIDGE_MAX_LINE_LENGTH", "0"],
+        ["MTA_BRIDGE_MAX_LINE_LENGTH", "-1"],
     ])("when %s is set to invalid value %j", (envVar, badValue) => {
         it("throws at startup instead of silently disabling the cap/timeout", async () => {
             process.env[envVar] = badValue;
@@ -130,7 +160,21 @@ describe("index", () => {
         });
     });
 
-    it("uses the default ingest base URL, ports, timeout, and max message size when their env vars are unset", async () => {
+    // Regression for a follow-up review finding: MTA_INGEST_TIMEOUT_MS has no upper bound of its own, but
+    // TcpTableServer's force-close grace period and smtp-server's own hardcoded close timeout are both
+    // still fixed at 30s. A too-large MTA_INGEST_TIMEOUT_MS (e.g. an operator choosing 45-60s for a slow
+    // upstream) plus a SIGTERM arriving mid-deliver() would let the 30s force-close destroy the socket
+    // before that call's response is sent - Postfix sees a reset and retries the whole transaction, and
+    // restapi's direct-mailbox delivery path has no idempotency key for that, so the retry duplicates the
+    // delivery. This asserts a too-large value is rejected at startup instead.
+    describe.each(["25000", "30000", "100000"])("when MTA_INGEST_TIMEOUT_MS is set to %s (at or above the 30s close timeout minus headroom)", (tooLarge) => {
+        it("throws at startup instead of letting a slow-upstream timeout outlive the shutdown grace period", async () => {
+            process.env.MTA_INGEST_TIMEOUT_MS = tooLarge;
+            await expect(importIndexFresh()).rejects.toThrow(/MTA_INGEST_TIMEOUT_MS must be a positive number and below 25000/);
+        });
+    });
+
+    it("uses the default ingest base URL, ports, timeout, max message size, and max line length when their env vars are unset", async () => {
         await importIndexFresh();
 
         expect(mockMtaIngestClient).toHaveBeenCalledWith("http://server:3000/internal/mta", "test-secret", 10_000);
@@ -138,15 +182,22 @@ describe("index", () => {
         expect(mockTcpTableServerInstances[1].listen).toHaveBeenCalledWith(10041);
         expect(mockSmtpDeliveryServerInstances[0].listen).toHaveBeenCalledWith(2525);
         expect(mockSmtpDeliveryServerInstances[0].maxMessageSize).toBe(26_214_400);
+        // Both tcp_table listeners get the same (unconfigurable-by-env) close timeout and the default max
+        // line length.
+        expect(mockTcpTableServerInstances[0].closeTimeoutMs).toBe(30_000);
+        expect(mockTcpTableServerInstances[0].maxLineLength).toBe(8192);
+        expect(mockTcpTableServerInstances[1].closeTimeoutMs).toBe(30_000);
+        expect(mockTcpTableServerInstances[1].maxLineLength).toBe(8192);
     });
 
-    it("uses overridden ingest base URL, ports, timeout, and max message size from env vars when set", async () => {
+    it("uses overridden ingest base URL, ports, timeout, max message size, and max line length from env vars when set", async () => {
         process.env.MTA_INGEST_BASE_URL = "http://custom-server:4000/internal/mta";
         process.env.MTA_BRIDGE_DOMAIN_PORT = "20040";
         process.env.MTA_BRIDGE_RECIPIENT_PORT = "20041";
         process.env.MTA_BRIDGE_SMTP_PORT = "3525";
         process.env.MTA_INGEST_TIMEOUT_MS = "5000";
         process.env.MTA_BRIDGE_MAX_MESSAGE_SIZE = "1048576";
+        process.env.MTA_BRIDGE_MAX_LINE_LENGTH = "4096";
 
         await importIndexFresh();
 
@@ -155,6 +206,8 @@ describe("index", () => {
         expect(mockTcpTableServerInstances[1].listen).toHaveBeenCalledWith(20041);
         expect(mockSmtpDeliveryServerInstances[0].listen).toHaveBeenCalledWith(3525);
         expect(mockSmtpDeliveryServerInstances[0].maxMessageSize).toBe(1_048_576);
+        expect(mockTcpTableServerInstances[0].maxLineLength).toBe(4096);
+        expect(mockTcpTableServerInstances[1].maxLineLength).toBe(4096);
     });
 
     it("the domain server's lookup maps a found/not-found domain check to a tcp_table result", async () => {

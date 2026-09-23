@@ -13,7 +13,7 @@
 // Run as its own docker-compose service (`postfix-bridge`) using this same image - see docker-compose.yml.
 import { DEFAULT_MTA_INGEST_TIMEOUT_MS, MtaIngestClient } from "./MtaIngestClient.js";
 import { DEFAULT_MAX_MESSAGE_SIZE, SmtpDeliveryServer } from "./SmtpDeliveryServer.js";
-import { TcpTableServer } from "./TcpTableServer.js";
+import { DEFAULT_CLOSE_TIMEOUT_MS, DEFAULT_MAX_LINE_LENGTH, TcpTableServer } from "./TcpTableServer.js";
 
 function requireEnv(name: string, fallback?: string): string {
     const value: string | undefined = process.env[name] ?? fallback;
@@ -40,18 +40,32 @@ function requireEnv(name: string, fallback?: string): string {
  * This repo's own `.claude/NOTES.md` history has more than one prior bug of exactly this "blank/placeholder
  * env value slips through Helm templating" shape, so this validates defensively even though neither env var
  * is wired into the Helm chart/docker-compose.yml yet.
+ *
+ * `max`, when given, rejects a value at or above it too (see `MAX_INGEST_TIMEOUT_MS`'s own comment for why
+ * `MTA_INGEST_TIMEOUT_MS` specifically needs an upper bound, not just a lower one).
  */
-function requirePositiveNumber(name: string, fallback: number): number {
+function requirePositiveNumber(name: string, fallback: number, max?: number): number {
     const raw: string | undefined = process.env[name];
     if (raw === undefined) {
         return fallback;
     }
     const value: number = Number(raw);
-    if (!Number.isFinite(value) || value <= 0) {
-        throw new Error(`${name} must be a positive number if set (got '${raw}').`);
+    if (!Number.isFinite(value) || value <= 0 || (max !== undefined && value >= max)) {
+        const bound: string = max !== undefined ? ` and below ${max}` : "";
+        throw new Error(`${name} must be a positive number${bound} if set (got '${raw}').`);
     }
     return value;
 }
+
+// `MtaIngestClient`'s own fetch timeout must stay comfortably below both `TcpTableServer`'s force-close
+// grace period (`DEFAULT_CLOSE_TIMEOUT_MS`) and `smtp-server`'s own hardcoded 30s close timeout (not
+// configurable from this repo). Otherwise a slow-but-legitimate `MTA_INGEST_TIMEOUT_MS` (say 45-60s) plus a
+// pod rolling-restart (SIGTERM) arriving while a `deliver()` call is still in flight would let the 30s
+// force-close destroy the socket before that call's response is ever sent - Postfix sees a connection reset
+// and retries the whole transaction, and restapi's direct-mailbox delivery path has no idempotency key for
+// that (unlike its reportUnresolvableRecipient() path), so the retry becomes a duplicate delivery. 5s of
+// headroom below the close timeout.
+const MAX_INGEST_TIMEOUT_MS: number = DEFAULT_CLOSE_TIMEOUT_MS - 5_000;
 
 const ingestBaseUrl: string = requireEnv("MTA_INGEST_BASE_URL", "http://server:3000/internal/mta");
 const ingestSecret: string = requireEnv("MTA_INGEST_SECRET");
@@ -59,25 +73,37 @@ const domainPort: number = Number(process.env.MTA_BRIDGE_DOMAIN_PORT ?? 10040);
 const recipientPort: number = Number(process.env.MTA_BRIDGE_RECIPIENT_PORT ?? 10041);
 const smtpPort: number = Number(process.env.MTA_BRIDGE_SMTP_PORT ?? 2525);
 // How long every upstream call to the RapidMX server may take before this bridge gives up and maps it to
-// Postfix's own temporary-failure convention - see MtaIngestClient's own `timeoutMs` doc for why.
-const ingestTimeoutMs: number = requirePositiveNumber("MTA_INGEST_TIMEOUT_MS", DEFAULT_MTA_INGEST_TIMEOUT_MS);
+// Postfix's own temporary-failure convention - see MtaIngestClient's own `timeoutMs` doc for why, and
+// MAX_INGEST_TIMEOUT_MS's own comment for why this also has an upper bound.
+const ingestTimeoutMs: number = requirePositiveNumber("MTA_INGEST_TIMEOUT_MS", DEFAULT_MTA_INGEST_TIMEOUT_MS, MAX_INGEST_TIMEOUT_MS);
 // Caps one SMTP transaction's message size - see SmtpDeliveryServer's own `maxMessageSize` doc for why.
 const maxMessageSize: number = requirePositiveNumber("MTA_BRIDGE_MAX_MESSAGE_SIZE", DEFAULT_MAX_MESSAGE_SIZE);
+// Caps how long a tcp_table(5) connection may hold an unterminated line in memory - see TcpTableServer's
+// own `maxLineLength` doc for why.
+const maxLineLength: number = requirePositiveNumber("MTA_BRIDGE_MAX_LINE_LENGTH", DEFAULT_MAX_LINE_LENGTH);
 
 const client: MtaIngestClient = new MtaIngestClient(ingestBaseUrl, ingestSecret, ingestTimeoutMs);
 
 // `relay_domains = tcp:postfix-bridge:<domainPort>` - consulted once per RCPT TO, before relay_recipient_maps.
-const domainServer: TcpTableServer = new TcpTableServer(async (domain) => {
-    const found: boolean = await client.checkDomain(domain);
-    return found ? { found: true, value: domain } : { found: false };
-});
+const domainServer: TcpTableServer = new TcpTableServer(
+    async (domain) => {
+        const found: boolean = await client.checkDomain(domain);
+        return found ? { found: true, value: domain } : { found: false };
+    },
+    DEFAULT_CLOSE_TIMEOUT_MS,
+    maxLineLength,
+);
 
 // `relay_recipient_maps = tcp:postfix-bridge:<recipientPort>` - the actual mailbox/distribution-list existence
 // check, consulted for every recipient of a domain relay_domains already accepted.
-const recipientServer: TcpTableServer = new TcpTableServer(async (address) => {
-    const found: boolean = await client.resolveRecipient(address);
-    return found ? { found: true, value: address } : { found: false };
-});
+const recipientServer: TcpTableServer = new TcpTableServer(
+    async (address) => {
+        const found: boolean = await client.resolveRecipient(address);
+        return found ? { found: true, value: address } : { found: false };
+    },
+    DEFAULT_CLOSE_TIMEOUT_MS,
+    maxLineLength,
+);
 
 // `relay_transport = smtp:postfix-bridge:<smtpPort>` - the delivery hop for everything relay_domains accepted, and only
 // that: a `static:` transport_maps entry would send every recipient here, external addresses included.

@@ -27,8 +27,9 @@ yarn start
 | `MTA_BRIDGE_DOMAIN_PORT`   | `tcp_table` port for `relay_domains` (default `10040`)                  |
 | `MTA_BRIDGE_RECIPIENT_PORT`| `tcp_table` port for `relay_recipient_maps` (default `10041`)            |
 | `MTA_BRIDGE_SMTP_PORT`     | Plain SMTP port for `relay_transport` final delivery (default `2525`)    |
-| `MTA_INGEST_TIMEOUT_MS`    | Timeout (ms) for every upstream call to the RapidMX server before it's treated as a temporary failure (default `10000`) |
+| `MTA_INGEST_TIMEOUT_MS`    | Timeout (ms) for every upstream call to the RapidMX server before it's treated as a temporary failure (default `10000`; must stay below 25000 so a slow-upstream call can't still be in flight when the 30s shutdown force-close timeout hits) |
 | `MTA_BRIDGE_MAX_MESSAGE_SIZE` | Maximum size (bytes) of one SMTP transaction's message before it's rejected (default `26214400`, 25 MiB) |
+| `MTA_BRIDGE_MAX_LINE_LENGTH` | Maximum size (characters) of one buffered-but-not-yet-newline-terminated `tcp_table` request line before the connection is dropped (default `8192`) |
 
 ## Deployment
 

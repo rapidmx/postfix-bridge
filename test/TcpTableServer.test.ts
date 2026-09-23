@@ -159,6 +159,68 @@ describe("TcpTableServer Tests", () => {
         }
     });
 
+    it("Destroys the connection once an unterminated line exceeds the configured max length, instead of growing the buffer without limit.", async () => {
+        // Regression for the same class of bug SmtpDeliveryServer's maxMessageSize/sizeExceeded guard
+        // fixed on the SMTP side: a client that never sends "\n" (or sends one extremely long line) must
+        // not be able to grow handleConnection()'s `buffer` without bound - that handler is synchronous
+        // and outside any try/catch, so left unchecked this either exhausts process memory (taking every
+        // listener in the process down with it, not just this connection) or throws an uncaught RangeError
+        // once V8's string-length ceiling is hit.
+        // Leaves the shared `server`/`start()` fixture alone (default 8192-char cap would make this test
+        // send an impractically large payload) so `afterEach`'s own `server.close()` still has something
+        // valid to close.
+        await start(async () => ({ found: true, value: "x" }));
+        const lookupMock = vi.fn();
+        const smallLineServer = new TcpTableServer(lookupMock, undefined, 16);
+        const smallPort = await smallLineServer.listen(0, "127.0.0.1");
+        try {
+            const client = net.createConnection({ port: smallPort, host: "127.0.0.1" });
+            await new Promise<void>((resolve) => client.once("connect", resolve));
+            const closed = new Promise<void>((resolve) => client.once("close", resolve));
+
+            client.write("x".repeat(100)); // well past the 16-character cap, and no "\n" anywhere in it
+
+            await closed;
+            expect(lookupMock).not.toHaveBeenCalled();
+        } finally {
+            await smallLineServer.close();
+        }
+    });
+
+    it("Drops the connection once the cap is exceeded even when a complete, well-formed line preceded it in the same chunk.", async () => {
+        // The overflow check runs only against whatever's left in `buffer` *after* draining every complete
+        // "\n"-terminated line - exercises that ordering (at least one line extracted, then the overflow
+        // check still trips on the remainder), not just the "never saw a newline at all" case above.
+        // socket.destroy() runs synchronously in that same "data" callback, before the microtask queue
+        // ever gets to the already-scheduled handleLine() for the earlier line, whose own
+        // `if (socket.destroyed) return` guard then skips it - so the earlier line's response never
+        // arrives either. That's an accepted trade-off (Postfix just sees the connection close before a
+        // response, the same "safe to retry" outcome as any other dropped connection) in exchange for
+        // never growing the buffer past the cap even by one more chunk while a response is pending.
+        await start(async () => ({ found: true, value: "x" }));
+        const lookupMock = vi.fn().mockResolvedValue({ found: true, value: "ok" });
+        const smallLineServer = new TcpTableServer(lookupMock, undefined, 16);
+        const smallPort = await smallLineServer.listen(0, "127.0.0.1");
+        try {
+            const client = net.createConnection({ port: smallPort, host: "127.0.0.1" });
+            await new Promise<void>((resolve) => client.once("connect", resolve));
+            const closed = new Promise<void>((resolve) => client.once("close", resolve));
+            let response = "";
+            client.setEncoding("utf-8");
+            client.on("data", (chunk: string) => (response += chunk));
+
+            // One complete, well-formed line immediately followed - in the very same write - by a second,
+            // unterminated line that's already past the 16-character cap on its own.
+            client.write(`get a.com\n${"y".repeat(100)}`);
+
+            await closed;
+            expect(response).toBe("");
+            expect(lookupMock).not.toHaveBeenCalled();
+        } finally {
+            await smallLineServer.close();
+        }
+    });
+
     it("Rejects close() if the underlying net.Server reports an error while closing.", async () => {
         await start(async () => ({ found: true, value: "x" }));
         const closeError = new Error("boom");
