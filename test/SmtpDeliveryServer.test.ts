@@ -152,6 +152,56 @@ describe("SmtpDeliveryServer Tests", () => {
         expect(deliverMock).not.toHaveBeenCalled();
     });
 
+    it("Rejects an over-limit message with a 5xx (permanent) code and never buffers past the cap or calls deliver().", async () => {
+        deliverMock = vi.fn().mockResolvedValue(undefined);
+        const smallClient = { deliver: deliverMock } as unknown as MtaIngestClient;
+        const smallServer = new SmtpDeliveryServer(smallClient, 16);
+        const smallPort = await smallServer.listen(0, "127.0.0.1");
+        try {
+            const transport = nodemailer.createTransport({
+                host: "127.0.0.1",
+                port: smallPort,
+                secure: false,
+                tls: { rejectUnauthorized: false },
+            });
+
+            await expect(
+                transport.sendMail({
+                    envelope: { from: "a@example.com", to: ["b@example.com"] },
+                    raw: "From: a@example.com\r\nSubject: this message is well over the sixteen byte cap\r\n\r\nBody\r\n",
+                }),
+            ).rejects.toThrow(/552/);
+
+            expect(deliverMock).not.toHaveBeenCalled();
+        } finally {
+            await smallServer.close();
+        }
+    });
+
+    it("Accepts a message at or under the configured size cap normally.", async () => {
+        deliverMock = vi.fn().mockResolvedValue(undefined);
+        const smallClient = { deliver: deliverMock } as unknown as MtaIngestClient;
+        const smallServer = new SmtpDeliveryServer(smallClient, 1024 * 1024);
+        const smallPort = await smallServer.listen(0, "127.0.0.1");
+        try {
+            const transport = nodemailer.createTransport({
+                host: "127.0.0.1",
+                port: smallPort,
+                secure: false,
+                tls: { rejectUnauthorized: false },
+            });
+
+            await transport.sendMail({
+                envelope: { from: "a@example.com", to: ["b@example.com"] },
+                raw: "From: a@example.com\r\nSubject: Hi\r\n\r\nBody\r\n",
+            });
+
+            expect(deliverMock).toHaveBeenCalledTimes(1);
+        } finally {
+            await smallServer.close();
+        }
+    });
+
     it("Rejects the SMTP transaction with a 4xx (retryable) code when deliver() fails.", async () => {
         deliverMock = vi.fn();
         await start();

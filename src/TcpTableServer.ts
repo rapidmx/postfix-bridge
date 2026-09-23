@@ -29,6 +29,12 @@ function encodeTcpTableValue(value: string): string {
     return value.replace(/[^\x21-\x7e]|[%]/g, (ch) => `%${ch.charCodeAt(0).toString(16).padStart(2, "0")}`);
 }
 
+/** Default grace period (ms) `close()` gives every open connection to end on its own before force-closing
+ * them - see the constructor's `closeTimeoutMs` doc for why this exists at all. Matches the magnitude of
+ * `smtp-server`'s own equivalent force-destroy timeout (30s) for consistency between this bridge's two
+ * listeners. */
+export const DEFAULT_CLOSE_TIMEOUT_MS = 30_000;
+
 /**
  * A minimal server for Postfix's `tcp_table(5)` lookup protocol - the mechanism this deployment's Postfix
  * `main.cf` uses (via `relay_domains`/`relay_recipient_maps`, see docker-compose.yml) to consult this
@@ -51,8 +57,24 @@ function encodeTcpTableValue(value: string): string {
  */
 export class TcpTableServer {
     private readonly server: net.Server;
+    // Tracks every currently-open connection so close() can force them shut past its timeout - see that
+    // method's own comment. `net.Server` (unlike `http.Server`) has no built-in `closeAllConnections()`,
+    // so this class does the same bookkeeping by hand.
+    private readonly sockets: Set<net.Socket> = new Set();
 
-    public constructor(private readonly lookup: TcpTableLookup) {
+    public constructor(
+        private readonly lookup: TcpTableLookup,
+        /** `close()` force-closes any still-open connection after this many milliseconds rather than
+         * waiting for it to end on its own. Postfix's `tcp_table(5)` client is documented to reuse one
+         * connection for many sequential lookups over the process's lifetime - without this, a plain
+         * `net.Server.close()` would never invoke its callback while that connection is still open (its
+         * callback only fires once every connection has ended), so a live connection at shutdown time would
+         * hang `close()` forever. That in turn hangs `index.ts`'s own `shutdown()`, which never reaches
+         * `process.exit(0)` - Kubernetes then SIGKILLs the pod once `terminationGracePeriodSeconds` elapses
+         * instead of a clean drain. Contrast `SmtpDeliveryServer`'s underlying `smtp-server` library, which
+         * already force-destroys pending connections after its own 30s timeout. */
+        private readonly closeTimeoutMs: number = DEFAULT_CLOSE_TIMEOUT_MS,
+    ) {
         this.server = net.createServer((socket) => this.handleConnection(socket));
     }
 
@@ -65,13 +87,34 @@ export class TcpTableServer {
     }
 
     public close(): Promise<void> {
-        return new Promise((resolve, reject) => this.server.close((err) => (err ? reject(err) : resolve())));
+        return new Promise((resolve, reject) => {
+            // Destroying every currently-tracked socket is the "give up waiting, force-drain" fallback this
+            // class's own doc comment above describes - only fires if `close()`'s callback hasn't already
+            // resolved/rejected by then (i.e. every connection ended on its own first).
+            const forceTimer: NodeJS.Timeout = setTimeout(() => {
+                for (const socket of this.sockets) {
+                    socket.destroy();
+                }
+            }, this.closeTimeoutMs);
+            forceTimer.unref();
+            this.server.close((err) => {
+                clearTimeout(forceTimer);
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve();
+                }
+            });
+        });
     }
 
     private handleConnection(socket: net.Socket): void {
         let buffer: string = "";
         // Serializes request handling on this connection - see this class's own doc comment for why.
         let queue: Promise<void> = Promise.resolve();
+
+        this.sockets.add(socket);
+        socket.on("close", () => this.sockets.delete(socket));
 
         socket.setEncoding("utf-8");
         socket.on("data", (chunk: string) => {

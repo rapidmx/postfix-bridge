@@ -1,5 +1,15 @@
 # Release Notes
 
+## Unreleased
+
+### postfix-bridge
+
+* Fixed a recipient list becoming ambiguous when an SMTP client sent a `RCPT TO` address with a literal comma inside a quoted local part (RFC 5321 permits this, and Postfix's own SMTP library accepts it unchanged): joining recipients with a bare `,` into the `X-Envelope-To` header could split one address into two on the receiving end. Every envelope address is now percent-encoded before being placed in a header, which also protects a non-ASCII (SMTPUTF8) local part from being mangled as a raw HTTP header value
+* Fixed this bridge accepting an SMTP message of any size and buffering all of it into memory before handing it off: it now enforces a configurable maximum message size (`MTA_BRIDGE_MAX_MESSAGE_SIZE`, default 25 MiB) and rejects an over-limit message with a permanent `552` instead of buffering it in full
+* Fixed an unresponsive RapidMX server being able to hang this bridge's `tcp_table`/SMTP listeners indefinitely: every upstream HTTP call now aborts after a configurable timeout (`MTA_INGEST_TIMEOUT_MS`, default 10s) and is treated the same as any other transient upstream failure
+* Fixed graceful shutdown hanging forever if Postfix still held a `tcp_table` connection open (it's documented to reuse one connection for many sequential lookups): closing a `tcp_table` listener now force-closes any still-open connection after a timeout, matching the force-close behavior its SMTP delivery listener already had
+* Documented in `docker-compose.yml` that its DKIM setup is stale relative to the Helm chart's `dkim-keys-sync`/`dkim-sync.sh` mechanism and is eval/local-only until it's hardened to match
+
 ## v1.4.1
 
 ### Helm chart and docker-compose.yml

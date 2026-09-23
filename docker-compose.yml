@@ -92,10 +92,17 @@ services:
             # Carves out the one destination that's actually internal (postfix-bridge) from the mandatory
             # outbound TLS default above - see docker/postfix/tls_policy.txt for the full explanation.
             - POSTFIX_smtp_tls_policy_maps=texthash:/etc/postfix/tls_policy.txt
-            # rspamd (the image's bundled DKIM backend since v6) signs outbound mail using whatever key file
-            # it finds at /var/lib/rspamd/dkim/<domain>.<selector>.key - the RapidMX server's own
-            # FsDkimKeyProvider writes it there (see that repo's compose file for how it shares this volume).
-            # Kept as a fallback safety net for a domain added here without a corresponding Domain record.
+            # EVAL/LOCAL-ONLY, stale relative to helm/templates/1_deployments/postfix.yaml: this image
+            # actually signs with OpenDKIM, reading /etc/opendkim/keys/<domain>.private - NOT rspamd, and
+            # NOT the /var/lib/rspamd/dkim path the RapidMX server's own FsDkimKeyProvider writes to (see
+            # .claude/NOTES.md's 2026-09-19/2026-09-20 entries for how that mismatch was found and fixed).
+            # The Helm chart closes that gap with a `dkim-keys-sync` init container plus a running
+            # `dkim-sync.sh` watcher that copies/rebuilds OpenDKIM's tables from the shared volume and
+            # signals it to reload; this compose stack has neither, so DKIM here only ever verifies against
+            # whatever key OpenDKIM autogenerates for itself (DKIM_AUTOGENERATE below), never the one this
+            # deployment's own DNS-setup page tells you to publish. Fine for local single-host evaluation of
+            # inbound/outbound routing; port the Helm chart's sync mechanism here before relying on this
+            # stack's outbound DKIM signatures actually verifying.
             - DKIM_AUTOGENERATE=${DKIM_AUTOGENERATE:-1}
             - DKIM_SELECTOR=${DKIM_SELECTOR:-mail}
         volumes:

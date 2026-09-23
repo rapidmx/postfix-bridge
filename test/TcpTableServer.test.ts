@@ -138,6 +138,27 @@ describe("TcpTableServer Tests", () => {
         client.destroy();
     });
 
+    it("Force-closes a still-open connection after the close timeout, so close() resolves within a bounded time instead of hanging forever.", async () => {
+        // Postfix's tcp_table client is documented to reuse one connection for many sequential lookups -
+        // a plain net.Server.close() never invokes its callback while a connection like that is still
+        // open. Uses its own short-timeout server (not the shared `server`/`start()` helper, whose
+        // default 30s close timeout would make this test itself hang) with a live, never-ended connection.
+        // Leaves the shared `server`/`start()` fixture alone (its default 30s close timeout would make
+        // this test itself hang) so `afterEach`'s own `server.close()` still has something valid to close.
+        await start(async () => ({ found: true, value: "x" }));
+        const shortTimeoutServer = new TcpTableServer(async () => ({ found: true, value: "x" }), 20);
+        const shortPort = await shortTimeoutServer.listen(0, "127.0.0.1");
+        const client = net.createConnection({ port: shortPort, host: "127.0.0.1" });
+        await new Promise<void>((resolve) => client.once("connect", resolve));
+        try {
+            const start = Date.now();
+            await expect(shortTimeoutServer.close()).resolves.toBeUndefined();
+            expect(Date.now() - start).toBeLessThan(2000);
+        } finally {
+            client.destroy();
+        }
+    });
+
     it("Rejects close() if the underlying net.Server reports an error while closing.", async () => {
         await start(async () => ({ found: true, value: "x" }));
         const closeError = new Error("boom");

@@ -11,8 +11,8 @@
 // decisions beyond "translate this protocol frame into that HTTP call", so it doesn't need any of that.
 //
 // Run as its own docker-compose service (`postfix-bridge`) using this same image - see docker-compose.yml.
-import { MtaIngestClient } from "./MtaIngestClient.js";
-import { SmtpDeliveryServer } from "./SmtpDeliveryServer.js";
+import { DEFAULT_MTA_INGEST_TIMEOUT_MS, MtaIngestClient } from "./MtaIngestClient.js";
+import { DEFAULT_MAX_MESSAGE_SIZE, SmtpDeliveryServer } from "./SmtpDeliveryServer.js";
 import { TcpTableServer } from "./TcpTableServer.js";
 
 function requireEnv(name: string, fallback?: string): string {
@@ -28,8 +28,13 @@ const ingestSecret: string = requireEnv("MTA_INGEST_SECRET");
 const domainPort: number = Number(process.env.MTA_BRIDGE_DOMAIN_PORT ?? 10040);
 const recipientPort: number = Number(process.env.MTA_BRIDGE_RECIPIENT_PORT ?? 10041);
 const smtpPort: number = Number(process.env.MTA_BRIDGE_SMTP_PORT ?? 2525);
+// How long every upstream call to the RapidMX server may take before this bridge gives up and maps it to
+// Postfix's own temporary-failure convention - see MtaIngestClient's own `timeoutMs` doc for why.
+const ingestTimeoutMs: number = Number(process.env.MTA_INGEST_TIMEOUT_MS ?? DEFAULT_MTA_INGEST_TIMEOUT_MS);
+// Caps one SMTP transaction's message size - see SmtpDeliveryServer's own `maxMessageSize` doc for why.
+const maxMessageSize: number = Number(process.env.MTA_BRIDGE_MAX_MESSAGE_SIZE ?? DEFAULT_MAX_MESSAGE_SIZE);
 
-const client: MtaIngestClient = new MtaIngestClient(ingestBaseUrl, ingestSecret);
+const client: MtaIngestClient = new MtaIngestClient(ingestBaseUrl, ingestSecret, ingestTimeoutMs);
 
 // `relay_domains = tcp:postfix-bridge:<domainPort>` - consulted once per RCPT TO, before relay_recipient_maps.
 const domainServer: TcpTableServer = new TcpTableServer(async (domain) => {
@@ -46,7 +51,7 @@ const recipientServer: TcpTableServer = new TcpTableServer(async (address) => {
 
 // `relay_transport = smtp:postfix-bridge:<smtpPort>` - the delivery hop for everything relay_domains accepted, and only
 // that: a `static:` transport_maps entry would send every recipient here, external addresses included.
-const smtpServer: SmtpDeliveryServer = new SmtpDeliveryServer(client);
+const smtpServer: SmtpDeliveryServer = new SmtpDeliveryServer(client, maxMessageSize);
 
 async function start(): Promise<void> {
     await Promise.all([domainServer.listen(domainPort), recipientServer.listen(recipientPort), smtpServer.listen(smtpPort)]);

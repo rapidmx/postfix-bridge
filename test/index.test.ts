@@ -11,15 +11,21 @@ const mockCheckDomain = vi.fn();
 const mockResolveRecipient = vi.fn();
 const mockDeliver = vi.fn();
 
-const mockMtaIngestClient = vi.fn(function (this: Record<string, unknown>, baseUrl: string, secret: string) {
+const mockMtaIngestClient = vi.fn(function (
+    this: Record<string, unknown>,
+    baseUrl: string,
+    secret: string,
+    timeoutMs: number,
+) {
     this.baseUrl = baseUrl;
     this.secret = secret;
+    this.timeoutMs = timeoutMs;
     this.checkDomain = mockCheckDomain;
     this.resolveRecipient = mockResolveRecipient;
     this.deliver = mockDeliver;
 });
 
-vi.mock("../src/MtaIngestClient.js", () => ({ MtaIngestClient: mockMtaIngestClient }));
+vi.mock("../src/MtaIngestClient.js", () => ({ MtaIngestClient: mockMtaIngestClient, DEFAULT_MTA_INGEST_TIMEOUT_MS: 10_000 }));
 
 let mockDomainListenShouldFail = false;
 const mockTcpTableServerInstances: Array<{ lookup: (key: string) => unknown; listen: unknown; close: unknown }> = [];
@@ -36,15 +42,23 @@ const mockTcpTableServer = vi.fn(function (this: Record<string, unknown>, lookup
 
 vi.mock("../src/TcpTableServer.js", () => ({ TcpTableServer: mockTcpTableServer }));
 
-const mockSmtpDeliveryServerInstances: Array<{ client: unknown; listen: unknown; close: unknown }> = [];
-const mockSmtpDeliveryServer = vi.fn(function (this: Record<string, unknown>, client: unknown) {
+const mockSmtpDeliveryServerInstances: Array<{
+    client: unknown;
+    maxMessageSize: unknown;
+    listen: unknown;
+    close: unknown;
+}> = [];
+const mockSmtpDeliveryServer = vi.fn(function (this: Record<string, unknown>, client: unknown, maxMessageSize: unknown) {
     this.client = client;
+    this.maxMessageSize = maxMessageSize;
     this.listen = vi.fn().mockResolvedValue(2525);
     this.close = vi.fn().mockResolvedValue(undefined);
-    mockSmtpDeliveryServerInstances.push(this as unknown as { client: unknown; listen: unknown; close: unknown });
+    mockSmtpDeliveryServerInstances.push(
+        this as unknown as { client: unknown; maxMessageSize: unknown; listen: unknown; close: unknown },
+    );
 });
 
-vi.mock("../src/SmtpDeliveryServer.js", () => ({ SmtpDeliveryServer: mockSmtpDeliveryServer }));
+vi.mock("../src/SmtpDeliveryServer.js", () => ({ SmtpDeliveryServer: mockSmtpDeliveryServer, DEFAULT_MAX_MESSAGE_SIZE: 26_214_400 }));
 
 async function importIndexFresh(): Promise<void> {
     vi.resetModules();
@@ -63,6 +77,8 @@ describe("index", () => {
         delete process.env.MTA_BRIDGE_DOMAIN_PORT;
         delete process.env.MTA_BRIDGE_RECIPIENT_PORT;
         delete process.env.MTA_BRIDGE_SMTP_PORT;
+        delete process.env.MTA_INGEST_TIMEOUT_MS;
+        delete process.env.MTA_BRIDGE_MAX_MESSAGE_SIZE;
         process.env.MTA_INGEST_SECRET = "test-secret";
 
         mockDomainListenShouldFail = false;
@@ -89,27 +105,31 @@ describe("index", () => {
         await expect(importIndexFresh()).rejects.toThrow("MTA_INGEST_SECRET must be set");
     });
 
-    it("uses the default ingest base URL and ports when their env vars are unset", async () => {
+    it("uses the default ingest base URL, ports, timeout, and max message size when their env vars are unset", async () => {
         await importIndexFresh();
 
-        expect(mockMtaIngestClient).toHaveBeenCalledWith("http://server:3000/internal/mta", "test-secret");
+        expect(mockMtaIngestClient).toHaveBeenCalledWith("http://server:3000/internal/mta", "test-secret", 10_000);
         await vi.waitFor(() => expect((mockTcpTableServerInstances[0].listen as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(10040));
         expect(mockTcpTableServerInstances[1].listen).toHaveBeenCalledWith(10041);
         expect(mockSmtpDeliveryServerInstances[0].listen).toHaveBeenCalledWith(2525);
+        expect(mockSmtpDeliveryServerInstances[0].maxMessageSize).toBe(26_214_400);
     });
 
-    it("uses overridden ingest base URL and ports from env vars when set", async () => {
+    it("uses overridden ingest base URL, ports, timeout, and max message size from env vars when set", async () => {
         process.env.MTA_INGEST_BASE_URL = "http://custom-server:4000/internal/mta";
         process.env.MTA_BRIDGE_DOMAIN_PORT = "20040";
         process.env.MTA_BRIDGE_RECIPIENT_PORT = "20041";
         process.env.MTA_BRIDGE_SMTP_PORT = "3525";
+        process.env.MTA_INGEST_TIMEOUT_MS = "5000";
+        process.env.MTA_BRIDGE_MAX_MESSAGE_SIZE = "1048576";
 
         await importIndexFresh();
 
-        expect(mockMtaIngestClient).toHaveBeenCalledWith("http://custom-server:4000/internal/mta", "test-secret");
+        expect(mockMtaIngestClient).toHaveBeenCalledWith("http://custom-server:4000/internal/mta", "test-secret", 5000);
         await vi.waitFor(() => expect(mockTcpTableServerInstances[0].listen).toHaveBeenCalledWith(20040));
         expect(mockTcpTableServerInstances[1].listen).toHaveBeenCalledWith(20041);
         expect(mockSmtpDeliveryServerInstances[0].listen).toHaveBeenCalledWith(3525);
+        expect(mockSmtpDeliveryServerInstances[0].maxMessageSize).toBe(1_048_576);
     });
 
     it("the domain server's lookup maps a found/not-found domain check to a tcp_table result", async () => {
