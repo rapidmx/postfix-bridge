@@ -23,6 +23,36 @@ function requireEnv(name: string, fallback?: string): string {
     return value;
 }
 
+/**
+ * Parses a numeric env var, falling back to `fallback` when unset, but failing fast (rather than silently
+ * falling back to something unbounded/nonsensical) when it's *set* to something that isn't a positive,
+ * finite number. Both this bridge's own two numeric env vars have exactly that failure mode downstream if a
+ * blank/placeholder/malformed value slips through. `SmtpDeliveryServer`'s `size` option
+ * (`MTA_BRIDGE_MAX_MESSAGE_SIZE`) is handed straight to `smtp-server`, whose own `startDataMode()` computes
+ * `(maxBytes && Number(maxBytes)) || Infinity` - `NaN`, `0`, or `""` are all falsy, so the message-size cap
+ * this bridge exists to enforce would silently become *no cap at all*, with no error, no log line, and a
+ * normal `250 OK` - reproducing the exact unbounded-buffering issue that option was added to close.
+ * `MtaIngestClient`'s `timeoutMs` (`MTA_INGEST_TIMEOUT_MS`) is handed to `AbortSignal.timeout()`, which
+ * throws synchronously for `NaN`/a negative number - every domain check/recipient resolution/delivery would
+ * then permanently temp-fail from the first request onward. Loud rather than silent, but still better
+ * diagnosed at startup than at the first SMTP conversation.
+ *
+ * This repo's own `.claude/NOTES.md` history has more than one prior bug of exactly this "blank/placeholder
+ * env value slips through Helm templating" shape, so this validates defensively even though neither env var
+ * is wired into the Helm chart/docker-compose.yml yet.
+ */
+function requirePositiveNumber(name: string, fallback: number): number {
+    const raw: string | undefined = process.env[name];
+    if (raw === undefined) {
+        return fallback;
+    }
+    const value: number = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`${name} must be a positive number if set (got '${raw}').`);
+    }
+    return value;
+}
+
 const ingestBaseUrl: string = requireEnv("MTA_INGEST_BASE_URL", "http://server:3000/internal/mta");
 const ingestSecret: string = requireEnv("MTA_INGEST_SECRET");
 const domainPort: number = Number(process.env.MTA_BRIDGE_DOMAIN_PORT ?? 10040);
@@ -30,9 +60,9 @@ const recipientPort: number = Number(process.env.MTA_BRIDGE_RECIPIENT_PORT ?? 10
 const smtpPort: number = Number(process.env.MTA_BRIDGE_SMTP_PORT ?? 2525);
 // How long every upstream call to the RapidMX server may take before this bridge gives up and maps it to
 // Postfix's own temporary-failure convention - see MtaIngestClient's own `timeoutMs` doc for why.
-const ingestTimeoutMs: number = Number(process.env.MTA_INGEST_TIMEOUT_MS ?? DEFAULT_MTA_INGEST_TIMEOUT_MS);
+const ingestTimeoutMs: number = requirePositiveNumber("MTA_INGEST_TIMEOUT_MS", DEFAULT_MTA_INGEST_TIMEOUT_MS);
 // Caps one SMTP transaction's message size - see SmtpDeliveryServer's own `maxMessageSize` doc for why.
-const maxMessageSize: number = Number(process.env.MTA_BRIDGE_MAX_MESSAGE_SIZE ?? DEFAULT_MAX_MESSAGE_SIZE);
+const maxMessageSize: number = requirePositiveNumber("MTA_BRIDGE_MAX_MESSAGE_SIZE", DEFAULT_MAX_MESSAGE_SIZE);
 
 const client: MtaIngestClient = new MtaIngestClient(ingestBaseUrl, ingestSecret, ingestTimeoutMs);
 

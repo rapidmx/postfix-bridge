@@ -105,6 +105,31 @@ describe("index", () => {
         await expect(importIndexFresh()).rejects.toThrow("MTA_INGEST_SECRET must be set");
     });
 
+    // Regression coverage for a real, reproduced bug: smtp-server's own `startDataMode()` computes
+    // `(maxBytes && Number(maxBytes)) || Infinity`, so a NaN/0/"" `size` option silently becomes NO cap at
+    // all (sizeExceeded can never become true again) - exactly the unbounded-buffering issue this bridge's
+    // size cap exists to close, with no error, no log, and a normal 250 OK. These assert this bridge fails
+    // fast at startup instead, for both of its own numeric env vars (MTA_INGEST_TIMEOUT_MS fails the
+    // opposite way in practice - AbortSignal.timeout(NaN) throws synchronously - but the same startup
+    // validation still gives a clearer diagnostic than a permanent temp-failure on the first request).
+    describe.each([
+        ["MTA_BRIDGE_MAX_MESSAGE_SIZE", "not-a-number"],
+        ["MTA_BRIDGE_MAX_MESSAGE_SIZE", ""],
+        ["MTA_BRIDGE_MAX_MESSAGE_SIZE", "0"],
+        ["MTA_BRIDGE_MAX_MESSAGE_SIZE", "-1"],
+        ["MTA_INGEST_TIMEOUT_MS", "not-a-number"],
+        ["MTA_INGEST_TIMEOUT_MS", ""],
+        ["MTA_INGEST_TIMEOUT_MS", "0"],
+        ["MTA_INGEST_TIMEOUT_MS", "-1"],
+    ])("when %s is set to invalid value %j", (envVar, badValue) => {
+        it("throws at startup instead of silently disabling the cap/timeout", async () => {
+            process.env[envVar] = badValue;
+            await expect(importIndexFresh()).rejects.toThrow(
+                new RegExp(`${envVar} must be a positive number`),
+            );
+        });
+    });
+
     it("uses the default ingest base URL, ports, timeout, and max message size when their env vars are unset", async () => {
         await importIndexFresh();
 

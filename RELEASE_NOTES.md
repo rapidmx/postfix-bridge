@@ -9,6 +9,7 @@
 * Fixed an unresponsive RapidMX server being able to hang this bridge's `tcp_table`/SMTP listeners indefinitely: every upstream HTTP call now aborts after a configurable timeout (`MTA_INGEST_TIMEOUT_MS`, default 10s) and is treated the same as any other transient upstream failure
 * Fixed graceful shutdown hanging forever if Postfix still held a `tcp_table` connection open (it's documented to reuse one connection for many sequential lookups): closing a `tcp_table` listener now force-closes any still-open connection after a timeout, matching the force-close behavior its SMTP delivery listener already had
 * Documented in `docker-compose.yml` that its DKIM setup is stale relative to the Helm chart's `dkim-keys-sync`/`dkim-sync.sh` mechanism and is eval/local-only until it's hardened to match
+* Fixed `MTA_BRIDGE_MAX_MESSAGE_SIZE`/`MTA_INGEST_TIMEOUT_MS` silently disabling the protections they configure when set to a blank, zero, or otherwise invalid value: a `NaN`/`0`/empty message-size cap made `smtp-server` fall back to no limit at all, with no error and a normal `250 OK` - reproducing the exact unbounded-buffering issue the cap above exists to close. Both env vars now fail fast at startup instead if set to anything other than a positive, finite number
 
 ## v1.4.1
 
