@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-23
+
+### Added
+- Added RELEASE_NOTES.md and README entries for the new env vars and fixes
+- Added NOTES.md session log entry for this adversarial-review pass
+- Added regression tests asserting both env vars reject invalid values before the bridge starts listening
+- Added regression tests for both, and document the fixes in the README, RELEASE_NOTES.md and NOTES.md
+
+### Changed
+- Document that docker-compose.yml's DKIM setup is stale and eval/local-only relative to the Helm chart's dkim-keys-sync mechanism
+- Document the fix in RELEASE_NOTES.md and NOTES.md
+
+### Fixed
+- Fixed a comma inside a quoted-local-part recipient making the X-Envelope-To header ambiguous by percent-encoding every envelope address before joining
+- Fixed unbounded in-memory buffering of an SMTP message by capping message size (MTA_BRIDGE_MAX_MESSAGE_SIZE) and stopping buffering once smtp-server flags it exceeded
+- Fixed a hung upstream HTTP call stalling every queued tcp_table lookup or the in-flight SMTP transaction by aborting every fetch after a configurable timeout (MTA_INGEST_TIMEOUT_MS)
+- Fixed TcpTableServer.close() hanging forever when Postfix still holds a tcp_table connection open by force-closing tracked sockets after a timeout
+- Fixed MTA_BRIDGE_MAX_MESSAGE_SIZE and MTA_INGEST_TIMEOUT_MS silently disabling the protections they configure by failing fast at startup on a blank, zero, or non-numeric value instead of falling back to no cap at all
+- Fixed TcpTableServer's line buffer growing without limit for a client that never sends a newline by capping it with a configurable MTA_BRIDGE_MAX_LINE_LENGTH and destroying the connection once exceeded
+- Fixed MTA_INGEST_TIMEOUT_MS having no upper bound by rejecting a value that could outlive the 30s shutdown force-close grace period, avoiding a dropped in-flight delivery response and duplicate retry
+
 ## [1.4.1] - 2026-09-20
 
 ### Changed
@@ -89,7 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed @rapidrest/cli as a dep
 
-[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.2.0...v1.3.0

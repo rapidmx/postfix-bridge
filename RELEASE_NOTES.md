@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.5.0
+
 ### postfix-bridge
 
 * Fixed a recipient list becoming ambiguous when an SMTP client sent a `RCPT TO` address with a literal comma inside a quoted local part (RFC 5321 permits this, and Postfix's own SMTP library accepts it unchanged): joining recipients with a bare `,` into the `X-Envelope-To` header could split one address into two on the receiving end. Every envelope address is now percent-encoded before being placed in a header, which also protects a non-ASCII (SMTPUTF8) local part from being mangled as a raw HTTP header value
