@@ -9,6 +9,18 @@ any one machine's global Claude memory), so it travels with the code.
 decision, finding, or reverted approach worth remembering, add a dated entry under Session Log.
 Keep entries terse — this is a reference, not a transcript.
 
+## Agent model assignments (JP, 2026-10-28)
+
+Standing rule for every AI agent working on this project (applies to all RapidMX and RapidREST repositories):
+
+| Kind of work | Model |
+|---|---|
+| Design (specs, plans, architecture proposals) | Opus 5.5 (`claude-opus-5-5`) |
+| Architectural review | Opus 5.5 (`claude-opus-5-5`) |
+| Code review (finding and verifying defects in diffs or code) | Sonnet 5.5 (`claude-sonnet-5-5`) |
+| Fixes (implementing review findings and other code changes) | Sonnet 5.5 (`claude-sonnet-5-5`) |
+| Simple operations (file operations, renames, project initialization and similar mechanical tasks) | Haiku 5.5 (`claude-haiku-5-5`) |
+
 ## Standing decisions
 
 - **Commit discipline.** Don't `git commit` unless explicitly asked for *that specific piece of
@@ -326,15 +338,3 @@ Spec: `D:/github/rapidmx/restapi/specs/dns_publishing_and_integrations.md` §6.2
 - **Lab** (real `boky/postfix`, `/docker-init.d/opendkim.sh` + script mounted): signed `s=mail`, a live switch reloaded and the next message was signed `s=rmx20261027` with the old key still on disk, and after a restart the image said "Will not overwrite" and signed `s=rmx20261027`.
 - **Follow-up outside this repo:** the server chart's `postfixBridge` dependency moves to the release that carries this.
 - **CI fix pushed with it:** `validate` failed on new high advisories (nodemailer via smtp-server, plus dev-only vite, brace-expansion, source-map-js, undici); refreshed them in the lockfile within the existing ranges. smtp-server 3.21 ships its own types, which no longer pull in `@types/node`, and TypeScript 6 includes no `@types` by default, so `tsconfig.json` now lists `"types": ["node"]` as the sibling repos do.
-
-## Agent model assignments (JP, 2026-10-28)
-
-Standing rule for every AI agent working on this project (applies to all RapidMX and RapidREST repositories):
-
-| Kind of work | Model |
-|---|---|
-| Design (specs, plans, architecture proposals) | Opus 5.5 (`claude-opus-5-5`) |
-| Architectural review | Opus 5.5 (`claude-opus-5-5`) |
-| Code review (finding and verifying defects in diffs or code) | Sonnet 5.5 (`claude-sonnet-5-5`) |
-| Fixes (implementing review findings and other code changes) | Sonnet 5.5 (`claude-sonnet-5-5`) |
-| Simple operations (file operations, renames, project initialization and similar mechanical tasks) | Haiku 5.5 (`claude-haiku-5-5`) |
