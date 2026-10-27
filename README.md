@@ -110,6 +110,8 @@ Installed on its own, set:
 Domains are the main service's to manage: add one in its admin console and Postfix accepts mail for it, lets the main service
 send as it, and signs its mail with the DKIM key the console shows - within `dkim.syncIntervalSeconds` (default 10), with nothing to
 restart or upgrade. `domains` is only the set Postfix knows when it starts. Removing a domain in the console stops it sending at once.
+When the server rotates a domain's DKIM key, Postfix switches to the new selector the same way and tells the server it has
+(`<domain>.signing` on the DKIM volume, which is why Postfix mounts it read-write).
 
 Port 25 is both the MX and the cluster's outbound relay, so Postfix has to tell the two apart by the client's address:
 clients in `postfix.internalNetworks` (default: the private ranges, i.e. the pod and node networks) may relay to anywhere in

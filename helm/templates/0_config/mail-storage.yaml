@@ -19,12 +19,13 @@ spec:
       storage: {{ .Values.dkim.storage.size }}
 {{- end }}
 ---
-# To supply your own DKIM key pair for a domain instead of relying on the RapidMX server's own
-# FsDkimKeyProvider/DKIM_AUTOGENERATE (recommended for production): drop the standard opendkim-genkey
-# output - <domain>/<selector>.private (PEM RSA private key) and <domain>/<selector>.txt (the DNS TXT record
-# text) - into this volume under /etc/opendkim/keys/<domain>/ (mounted only by the postfix Deployment);
-# this image's own startup script imports it into rspamd's native format (the dkim-keys PVC above) on
-# container start. Only ever mounted by one Deployment, so always ReadWriteOnce regardless of topology.
+# OpenDKIM's keys (postfix.yaml mounts it at /etc/opendkim/keys). dkim-sync.sh (mail-tls-policy.yaml) owns
+# <domain>/ and <domain>.private for every domain the RapidMX server has a key for: <domain>/<selector>.private
+# for the selector it signs with (and the one a rotation moved off, until the server deletes it), and
+# <domain>/selector naming the one in use. To supply your own key for a domain the server has no key for, put
+# the PEM private key here as <domain>.private (not opendkim-genkey's <domain>/<selector>.private, which nothing
+# reads) and restart Postfix: it is signed with dkim.selector. Only ever mounted by one Deployment, so always
+# ReadWriteOnce regardless of topology.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -37,33 +37,39 @@ spec:
         app: postfix
     spec:
       initContainers:
-        # This image signs with OpenDKIM and reads /etc/opendkim/keys/<domain>.private, generating its own key there when
-        # the file is missing (DKIM_AUTOGENERATE) - but the key published in DNS (the DNS-setup page) is the one the main
-        # service writes to /var/lib/rspamd/dkim/<domain>.<selector>.key. Left alone, Postfix signs with a key nobody
-        # published and every DKIM check fails. So the server's key is copied to where the image looks, before it starts;
-        # the image then keeps it ("Will not overwrite"). A domain added (or a key replaced) while Postfix runs is picked up
-        # by dkim-sync.sh, so this only matters for the first seconds after a start.
+        # This image signs with OpenDKIM and checks for /etc/opendkim/keys/<domain>.private when it starts, generating its own
+        # key there when the file is missing (DKIM_AUTOGENERATE) - but the key published in DNS (the DNS-setup page) is the
+        # one the main service writes to /var/lib/rspamd/dkim/<domain>.<selector>.key. So one pass of dkim-sync.sh
+        # (mail-tls-policy.yaml) puts each domain's key for its selector where OpenDKIM reads it, and a copy at
+        # <domain>.private, before the image starts; the image then keeps that copy ("Will not overwrite") rather than
+        # generating a key nobody published. OpenDKIM's tables are written by the same script in the Postfix container
+        # (opendkim.sh), so the ones this pass writes stay in this container. A domain added (or a key rotated) while Postfix
+        # runs is picked up by dkim-sync.sh there.
         - name: dkim-keys-sync
           image: {{ $.Values.postfix.image.registry }}/{{ $.Values.postfix.image.repository }}:{{ $.Values.postfix.image.tag }}
           command:
-            - sh
-            - -c
-            - |
-              for domain in {{ tpl ($.Values.domains | toString) $ | replace "," " " }}; do
-                src="/dkim-keys/${domain}.{{ $.Values.dkim.selector }}.key"
-                dst="/opendkim-keys/${domain}.private"
-                if [ -f "$src" ] && ! cmp -s "$src" "$dst"; then
-                  echo "Using the main service's DKIM key for ${domain}"
-                  install -m 0400 "$src" "$dst"
-                  rm -f "/opendkim-keys/${domain}.txt"
-                fi
-              done
+            - bash
+            - /opt/postfix-bridge/dkim-sync.sh
+            - --once
+          env:
+            - name: DKIM_SOURCE_DIR
+              value: /dkim-keys
+            - name: DKIM_KEYS_DIR
+              value: /opendkim-keys
+            - name: DKIM_TABLE_DIR
+              value: /tmp
+            - name: DKIM_SELECTOR
+              value: {{ $.Values.dkim.selector | quote }}
           volumeMounts:
             - name: dkim-keys
               mountPath: /dkim-keys
               readOnly: true
             - name: dkim-opendkim-keys
               mountPath: /opendkim-keys
+            - name: mail-tls-policy
+              mountPath: /opt/postfix-bridge/dkim-sync.sh
+              subPath: dkim-sync.sh
+              readOnly: true
       containers:
         - name: postfix
           image: {{ $.Values.postfix.image.registry }}/{{ $.Values.postfix.image.repository }}:{{ $.Values.postfix.image.tag }}
@@ -81,15 +87,17 @@ spec:
             # match the presented certificate is a common deliverability red flag with receiving providers.
             - name: POSTFIX_myhostname
               value: {{ include "postfixBridge.hostname" $ | quote }}
-            # This image signs with OpenDKIM, using /etc/opendkim/keys/<domain>.private. The key that matters is the one the
-            # main service writes to /var/lib/rspamd/dkim/<domain>.<selector>.key the moment a Domain is created - the one its
-            # DNS-setup page tells you to publish - which the dkim-keys-sync init container and dkim-sync.sh put there.
+            # This image signs with OpenDKIM. The key that matters is the one the main service writes to
+            # /var/lib/rspamd/dkim/<domain>.<selector>.key the moment a Domain is created - the one its DNS-setup page tells you
+            # to publish - which the dkim-keys-sync init container and dkim-sync.sh put where OpenDKIM reads it.
             # DKIM_AUTOGENERATE only makes a key for a domain in ALLOWED_SENDER_DOMAINS the main service hasn't made one for yet.
             - name: DKIM_AUTOGENERATE
               value: {{ $.Values.dkim.autogenerate | quote }}
+            # The selector of a domain whose DKIM key the main service hasn't rotated yet: a rotation names the domain's new one
+            # in /var/lib/rspamd/dkim/<domain>.selector, which dkim-sync.sh signs with instead.
             - name: DKIM_SELECTOR
               value: {{ $.Values.dkim.selector | quote }}
-            # How often dkim-sync.sh (mail-tls-policy.yaml) looks for keys the main service has written for new domains.
+            # How often dkim-sync.sh (mail-tls-policy.yaml) looks for keys and selectors the main service has written.
             - name: DKIM_SYNC_INTERVAL
               value: {{ $.Values.dkim.syncIntervalSeconds | quote }}
             # Inbound recipient/domain acceptance - both back this deployment's own Domain/mailbox
@@ -155,13 +163,16 @@ spec:
           resources:
             {{- toYaml $.Values.postfix.resources | nindent 12 }}
           volumeMounts:
-            # rspamd's own live signing directory - the other end of the main service Deployment's own
-            # mount of this same PVC.
+            # The main service's DKIM keys - the other end of the main service Deployment's own mount of this same PVC.
+            # Read-write: dkim-sync.sh writes <domain>.signing here, the selector OpenDKIM has loaded for each domain, which the
+            # main service's DKIM rotation waits for before it retires the old key.
             - name: dkim-keys
               mountPath: /var/lib/rspamd/dkim
-            # OpenDKIM's keys, one <domain>.private per domain (see the dkim-keys-sync init container: the main service's
-            # key for a domain replaces one the image generated). To supply a different key for a domain, put it here
-            # as <domain>.private with no <domain>.<selector>.key in dkim-keys above, and restart.
+            # OpenDKIM's keys: for each domain the main service has a key for, <domain>/<selector>.private (the key it signs
+            # with, and the one a rotation moved off until the main service deletes it), <domain>/selector naming the one in
+            # use, and <domain>.private, a copy the image checks for at start (see the dkim-keys-sync init container). To
+            # supply a different key for a domain, put it here as <domain>.private with no key for it in dkim-keys above, and
+            # restart; it is signed with DKIM_SELECTOR.
             - name: dkim-opendkim-keys
               mountPath: /etc/opendkim/keys
             - name: mail-tls

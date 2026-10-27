@@ -34,6 +34,9 @@ data:
   # 2. The image lists every address (0.0.0.0/0, read as a regular expression, which matches nothing) as OpenDKIM's "internal
   #    hosts" - the ones it signs for rather than verifies - so anyone who could reach port 25 got their mail signed as any
   #    of our domains. Only the networks Postfix itself trusts to relay (postfix.internalNetworks) are internal.
+  #
+  # It also replaces the image's KeyTable and SigningTable, which give every domain the global DKIM_SELECTOR, with dkim-sync.sh's,
+  # which give a rotated domain its own, before OpenDKIM reads them.
   opendkim.sh: |
     ns=$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf)
     if [ -n "$ns" ]; then
@@ -46,6 +49,7 @@ data:
       sed -i -E '/^[[:space:]]*#?[[:space:]]*InternalHosts/d' /etc/opendkim/opendkim.conf
       printf 'InternalHosts           %s\n' "$POSTFIX_mynetworks" >> /etc/opendkim/opendkim.conf
     fi
+    bash /opt/postfix-bridge/dkim-sync.sh --once
 
     # Run the watcher (dkim-sync.sh) beside OpenDKIM, under the image's own supervisord, so it is restarted if it ever stops.
     if ! grep -q '^\[program:dkim-sync\]' /etc/supervisord.conf; then
@@ -73,61 +77,203 @@ data:
   # Run by supervisord (opendkim.sh adds it): see the script's own comment.
   dkim-sync.sh: |
     #!/bin/bash
-    # Keeps OpenDKIM in step with the domains the main service registers, so a domain added in the admin console signs its mail
-    # without restarting Postfix or upgrading the release. The main service writes each domain's DKIM private key to
-    # $DKIM_SOURCE_DIR/<domain>.<selector>.key the moment the domain is created (and that key is what the console tells you to
-    # publish in DNS). The image, though, reads /etc/opendkim/keys/<domain>.private and lists domains in its KeyTable and
-    # SigningTable only when it starts. Every $DKIM_SYNC_INTERVAL seconds this copies any new or changed key to where the image
-    # looks, rebuilds both tables from the keys present, and, if anything changed, asks OpenDKIM to reload them.
+    # Keeps OpenDKIM in step with the domains the main service registers and the selector each is signed with, so a domain added in the
+    # admin console signs its mail, and a rotated DKIM key takes over, without restarting Postfix or upgrading the release. The main
+    # service writes each domain's DKIM private keys to $DKIM_SOURCE_DIR/<domain>.<selector>.key (the key the console tells you to
+    # publish in DNS) and, once a rotation switches a domain to a new selector, that selector to <domain>.selector; a domain without
+    # one is signed with the global $DKIM_SELECTOR. The image, though, reads OpenDKIM's keys and its KeyTable and SigningTable only
+    # when it starts. Every $DKIM_SYNC_INTERVAL seconds this copies each domain's key for its selector to
+    # $DKIM_KEYS_DIR/<domain>/<selector>.private, records that selector in $DKIM_KEYS_DIR/<domain>/selector, rebuilds both tables,
+    # asks OpenDKIM to reload them if anything changed, and on the next pass tells the main service which selector OpenDKIM signs each
+    # domain with, in <domain>.signing: a rotation starts retiring the old key only once that file names the new selector.
+    #
+    # $DKIM_KEYS_DIR/<domain>/ is this script's for every domain the main service has a key for. The key a domain moves off stays
+    # there until the main service deletes it (the end of a rotation's overlap), since OpenDKIM reads a key each time it signs and an
+    # SMTP session opened before a reload goes on with the tables it started with.
+    #
+    # The shared volume is the main service's to write too, so only plain files are read from it, and <domain>.signing is written
+    # through a new file of its own, renamed over it.
+    #
+    # With --once it makes one pass and exits: the dkim-keys-sync init container (postfix.yaml) and opendkim.sh run it that way, so
+    # OpenDKIM starts with the right keys and tables rather than the ones the image writes.
     SRC=${DKIM_SOURCE_DIR:-/var/lib/rspamd/dkim}
-    KEYS=/etc/opendkim/keys
+    KEYS=${DKIM_KEYS_DIR:-/etc/opendkim/keys}
+    TABLES=${DKIM_TABLE_DIR:-/etc/opendkim}
     SEL=${DKIM_SELECTOR:-mail}
     INTERVAL=${DKIM_SYNC_INTERVAL:-10}
+    declare -A warned
 
-    reload() {
-      # OpenDKIM re-reads its tables on SIGUSR1; not running yet (it starts a few seconds after this) is fine, it reads them then.
-      pkill -USR1 -x opendkim >/dev/null 2>&1
-      echo "Asked OpenDKIM to reload its keys"
+    # Said once per watcher, not every $INTERVAL seconds.
+    warn_once() {
+      [ -n "${warned[$1]}" ] && return
+      warned[$1]=1
+      echo "$2" >&2
+    }
+
+    # A host name only: this becomes a file name and a line in OpenDKIM's tables.
+    is_host() {
+      [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]
+    }
+
+    # One DNS label in lowercase, as the main service writes them.
+    is_selector() {
+      [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+    }
+
+    # A plain file: not a link (which could point anywhere in this container), a directory or a pipe (which would block a read).
+    regular() {
+      [ -f "$1" ] && [ ! -L "$1" ]
+    }
+
+    # The word a selector or acknowledgement file holds, nothing when it isn't a plain file. Long enough for any selector.
+    read_word() {
+      regular "$1" && head -c 64 "$1" | tr -d '[:space:]'
+    }
+
+    # The domains the main service has keys for: those a rotation gave a selector of their own, and those with a key for the global one.
+    domains() {
+      local f
+      for f in "$SRC"/*.selector; do
+        [ -e "$f" ] || [ -L "$f" ] && basename "$f" .selector
+      done
+      for f in "$SRC"/*."$SEL".key; do
+        regular "$f" && basename "$f" ".$SEL.key"
+      done
+    }
+
+    # Installs the key of the selector domain $1 is to be signed with in $KEYS/<domain>/ and records that selector there, setting
+    # changed=1 when that changes what OpenDKIM reads. Until that key is complete the domain keeps the key it has.
+    install_key() {
+      local d=$1 sel=$SEL src dst
+      if [ -e "$SRC/$d.selector" ] || [ -L "$SRC/$d.selector" ]; then
+        sel=$(read_word "$SRC/$d.selector")
+        if ! is_selector "$sel"; then
+          warn_once "$d:$sel" "Ignoring $SRC/$d.selector: '$sel' is not a DKIM selector, so $d keeps the key it is signed with"
+          return
+        fi
+      fi
+      src="$SRC/$d.$sel.key"
+      # Not yet fully written, or not a key at all: try again next time.
+      regular "$src" && openssl pkey -in "$src" -noout >/dev/null 2>&1 || return
+      dst="$KEYS/$d/$sel.private"
+      if ! cmp -s "$src" "$dst"; then
+        install -d -o opendkim -g opendkim -m 0750 "$KEYS/$d" && install -o opendkim -g opendkim -m 0400 "$src" "$dst" || return
+        echo "Using the main service's DKIM key for $d (selector $sel)"
+        changed=1
+      fi
+      if [ "$(read_word "$KEYS/$d/selector")" != "$sel" ]; then
+        printf '%s\n' "$sel" > "$KEYS/$d/selector.tmp" && mv -fT "$KEYS/$d/selector.tmp" "$KEYS/$d/selector" || return
+        changed=1
+      fi
+      # The image checks for <domain>.private when it starts and, without one, generates a key nobody published (and asks for it to
+      # be published). Keeping it a copy of the key in use stops that; the tables never name it.
+      if ! cmp -s "$src" "$KEYS/$d.private"; then
+        install -o opendkim -g opendkim -m 0400 "$src" "$KEYS/$d.private"
+      fi
+      rm -f "$KEYS/$d.txt"
+    }
+
+    # Removes the key of a selector a domain is no longer signed with once the main service has deleted it, so a retired key lives
+    # exactly as long as its published record. Only in the <domain>/ directories this script made, and never a key the tables name
+    # or named before this pass (OpenDKIM may not have reloaded yet).
+    remove_retired() {
+      local dir d cur k s
+      for dir in "$KEYS"/*/; do
+        dir=${dir%/}
+        regular "$dir/selector" || continue
+        d=$(basename "$dir")
+        cur=$(read_word "$dir/selector")
+        for k in "$dir"/*.private; do
+          s=$(basename "$k" .private)
+          [ -f "$k" ] && [ "$s" != "$cur" ] && [ "$s" != "${prev[$d]}" ] && [ ! -e "$SRC/$d.$s.key" ] || continue
+          rm -f "$k"
+          echo "Removed the retired DKIM key of $d (selector $s)"
+        done
+      done
+    }
+
+    # Writes <domain>.signing for each of the main service's domains whose selector it doesn't name yet, once the tables named that
+    # selector before this pass too, so OpenDKIM has had a pass to reload them. A new file is written and renamed over it: the main
+    # service may be reading it, and an exclusive create under a random name never writes through anything put in its place.
+    acknowledge() {
+      local d sel tmp
+      for d in "${!server[@]}"; do
+        sel=${signed[$d]}
+        [ -n "$sel" ] && [ "${prev[$d]}" = "$sel" ] || continue
+        [ "$(read_word "$SRC/$d.signing")" = "$sel" ] && continue
+        tmp=$(mktemp -u "$SRC/.$d.signing.XXXXXXXX")
+        if (set -C; printf '%s\n' "$sel" > "$tmp") 2>/dev/null && mv -fT "$tmp" "$SRC/$d.signing" 2>/dev/null; then
+          echo "OpenDKIM signs $d with selector $sel"
+        else
+          rm -f "$tmp"
+          warn_once "signing:$d:$sel" "Couldn't record in $SRC/$d.signing that OpenDKIM signs $d with selector $sel"
+        fi
+      done
     }
 
     sync() {
-      local changed=0 f d dst k keytable signing
-      for f in "$SRC"/*."$SEL".key; do
-        [ -f "$f" ] || continue
-        d=$(basename "$f" ".$SEL.key")
-        # A host name only: this becomes a file name and a line in OpenDKIM's tables.
-        [[ "$d" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || continue
-        # Not yet fully written, or not a key at all: try again next time.
-        openssl pkey -in "$f" -noout >/dev/null 2>&1 || continue
-        dst="$KEYS/$d.private"
-        if ! cmp -s "$f" "$dst"; then
-          if install -o opendkim -g opendkim -m 0400 "$f" "$dst"; then
-            echo "Using the main service's DKIM key for $d"
-            rm -f "$KEYS/$d.txt"
-            changed=1
-          fi
-        fi
-      done
+      local changed=0 d k from to sel keytable signing
+      local -A server signed prev
+      # The selector each domain was signed with before this pass (the image's tables, the first time).
+      if regular "$TABLES/SigningTable"; then
+        while read -r from to; do
+          d=${from#\*@}
+          [ -n "$d" ] && [ -n "$to" ] && prev[$d]=${to%%._domainkey.*}
+        done < "$TABLES/SigningTable"
+      fi
+
+      while IFS= read -r d; do
+        is_host "$d" || continue
+        server[$d]=1
+        install_key "$d"
+      done < <(domains | sort -u)
+      remove_retired
+
       keytable=$(mktemp)
       signing=$(mktemp)
+      # The keys this script installed, each domain's in-use one, then any <domain>.private of a domain the main service has no key for
+      # (one the image generated, or one put there by hand), signed with the global selector as before rotation existed.
+      for k in "$KEYS"/*/selector; do
+        regular "$k" || continue
+        d=$(basename "$(dirname "$k")")
+        sel=$(read_word "$k")
+        is_host "$d" && is_selector "$sel" && regular "$KEYS/$d/$sel.private" || continue
+        signed[$d]=$sel
+        echo "$sel._domainkey.$d $d:$sel:$KEYS/$d/$sel.private" >> "$keytable"
+        echo "*@$d $sel._domainkey.$d" >> "$signing"
+      done
       for k in "$KEYS"/*.private; do
         [ -f "$k" ] || continue
         d=$(basename "$k" .private)
+        is_host "$d" && [ -z "${signed[$d]}" ] || continue
         echo "$SEL._domainkey.$d $d:$SEL:$k" >> "$keytable"
         echo "*@$d $SEL._domainkey.$d" >> "$signing"
       done
-      if ! cmp -s "$keytable" /etc/opendkim/KeyTable || ! cmp -s "$signing" /etc/opendkim/SigningTable; then
-        cat "$keytable" > /etc/opendkim/KeyTable
-        cat "$signing" > /etc/opendkim/SigningTable
+      if ! cmp -s "$keytable" "$TABLES/KeyTable" || ! cmp -s "$signing" "$TABLES/SigningTable"; then
+        cat "$keytable" > "$TABLES/KeyTable"
+        cat "$signing" > "$TABLES/SigningTable"
         changed=1
       fi
       rm -f "$keytable" "$signing"
-      if [ "$changed" = 1 ]; then
-        reload
+
+      # OpenDKIM re-reads its tables (and the keys they name) on SIGUSR1; not running yet (it starts a few seconds after this) is fine,
+      # it reads them then.
+      if [ "$changed" = 1 ] && pkill -USR1 -x opendkim >/dev/null 2>&1; then
+        echo "Asked OpenDKIM to reload its keys"
+      fi
+      # A running OpenDKIM has the tables the previous pass left: it was either signalled after they were written or started after.
+      # Not running (not yet, or the image found no key to start it with), nothing is acknowledged.
+      if pgrep -x opendkim >/dev/null 2>&1; then
+        acknowledge
       fi
     }
 
-    echo "Watching $SRC for DKIM keys (selector $SEL) every $INTERVAL seconds"
+    if [ "$1" = --once ]; then
+      sync
+      exit 0
+    fi
+
+    echo "Watching $SRC for DKIM keys (selector $SEL, or the one a domain's <domain>.selector names) every $INTERVAL seconds"
     while true; do
       sync
       sleep "$INTERVAL"
