@@ -77,6 +77,15 @@ exec /usr/bin/install "\${args[@]}"
 `,
 };
 
+// Counts the commands a pass starts that the script can do without (see "Cost of a pass"): each logs itself to $FAKE_FORKS, then runs
+// the real one from the rest of the PATH (the stubs directory is first).
+for (const name of ["openssl", "head", "tr", "basename", "dirname", "rm", "cmp"]) {
+    STUBS[name] = `#!/bin/bash
+echo "\${0##*/}" >> "$FAKE_FORKS"
+PATH="\${PATH#*:}" exec "\${0##*/}" "$@"
+`;
+}
+
 /** Whether this machine lets the tests make symbolic links (Windows doesn't without Developer Mode; CI's Linux does). */
 function canSymlink(): boolean {
     const dir: string = fs.mkdtempSync(path.join(os.tmpdir(), "dkim-sync-link-"));
@@ -103,6 +112,8 @@ interface Run {
     stdout: string;
     stderr: string;
     log: string[];
+    /** The commands of the counted kind the pass started, in order. */
+    forks: string[];
 }
 
 // Each pass starts bash and openssl, which is slow on Windows.
@@ -116,6 +127,7 @@ describe("dkim-sync.sh", { timeout: 60_000 }, () => {
     let script: string;
     let stubs: string;
     let fakeLog: string;
+    let fakeForks: string;
 
     beforeEach(() => {
         root = slash(fs.mkdtempSync(path.join(os.tmpdir(), "dkim-sync-")));
@@ -125,6 +137,7 @@ describe("dkim-sync.sh", { timeout: 60_000 }, () => {
         stubs = `${root}/bin`;
         script = `${root}/dkim-sync.sh`;
         fakeLog = `${root}/fake.log`;
+        fakeForks = `${root}/forks.log`;
         for (const dir of [src, keys, tables, stubs]) {
             fs.mkdirSync(dir);
         }
@@ -133,6 +146,7 @@ describe("dkim-sync.sh", { timeout: 60_000 }, () => {
             fs.writeFileSync(`${stubs}/${name}`, body, { mode: 0o755 });
         }
         fs.writeFileSync(fakeLog, "");
+        fs.writeFileSync(fakeForks, "");
     });
 
     afterEach(() => {
@@ -146,6 +160,7 @@ describe("dkim-sync.sh", { timeout: 60_000 }, () => {
         options: { passes?: number; env?: Record<string, string> } = {}
     ): Run {
         fs.writeFileSync(fakeLog, "");
+        fs.writeFileSync(fakeForks, "");
         const args: string = options.passes ? "" : " --once";
         const result = child_process.spawnSync(
             bash,
@@ -170,6 +185,7 @@ describe("dkim-sync.sh", { timeout: 60_000 }, () => {
                     DKIM_SELECTOR: selector,
                     FAKE_OPENDKIM: opendkim,
                     FAKE_LOG: fakeLog,
+                    FAKE_FORKS: fakeForks,
                 },
             }
         );
@@ -178,6 +194,7 @@ describe("dkim-sync.sh", { timeout: 60_000 }, () => {
             stdout: result.stdout,
             stderr: result.stderr,
             log: fs.readFileSync(fakeLog, "utf8").split("\n").filter(Boolean),
+            forks: fs.readFileSync(fakeForks, "utf8").split("\n").filter(Boolean),
         };
     }
 
@@ -579,6 +596,48 @@ describe("dkim-sync.sh", { timeout: 60_000 }, () => {
             expect(fs.readdirSync(`${src}/example.com.signing`)).toEqual([]);
             expect(run.stderr.match(/Couldn't record/g)).toHaveLength(1);
             expect(fs.readdirSync(src).sort()).toEqual(["example.com.mail.key", "example.com.signing"]);
+        });
+    });
+
+    describe("Cost of a pass", () => {
+        // Every pass runs for every domain, every DKIM_SYNC_INTERVAL seconds, next to Postfix and OpenDKIM on the node: a pass over
+        // domains that haven't changed must cost no more than the two cmp each, not a process per word read or path split, nor an openssl.
+        it("Starts no openssl, head, tr, basename or dirname on a pass that changes nothing, however many domains there are.", () => {
+            const domains: string[] = ["a.example.com", "b.example.com", "c.example.com", "d.example.com"];
+            const key: string = newKey();
+            for (const d of domains) {
+                fs.writeFileSync(`${src}/${d}.mail.key`, key);
+            }
+            fs.writeFileSync(`${src}/b.example.com.rmx1.key`, key);
+            fs.writeFileSync(`${src}/b.example.com.selector`, "rmx1\n");
+
+            const first: Run = sync("running");
+            expect(first.forks).toContain("openssl");
+            const tablesBefore: string = table("KeyTable").join("\n");
+
+            // The second pass writes the acknowledgements; the third has nothing left to do.
+            sync("running");
+            const second: Run = sync("running");
+
+            expect(second.status).toBe(0);
+            expect(second.stdout).toBe("");
+            expect(table("KeyTable").join("\n")).toBe(tablesBefore);
+            // The one rm is the pass's own, for the two temporary tables.
+            expect(second.forks.filter((cmd) => cmd !== "cmp")).toEqual(["rm"]);
+            // The key of a domain that hasn't changed isn't checked again; and cmp stays at the two a domain's copies need, plus the tables.
+            expect(second.forks.filter((cmd) => cmd === "cmp").length).toBeLessThanOrEqual(domains.length * 2 + 2);
+        });
+
+        it("Still checks a key that changed, and keeps the domain's key when the new one isn't a key.", () => {
+            fs.writeFileSync(`${src}/example.com.mail.key`, newKey());
+            sync("running");
+            const installed: string = fs.readFileSync(`${keys}/example.com/mail.private`, "utf8");
+
+            fs.writeFileSync(`${src}/example.com.mail.key`, "half a key");
+            const run: Run = sync("running");
+
+            expect(run.forks).toContain("openssl");
+            expect(fs.readFileSync(`${keys}/example.com/mail.private`, "utf8")).toBe(installed);
         });
     });
 

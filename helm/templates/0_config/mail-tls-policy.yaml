@@ -102,6 +102,7 @@ data:
     SEL=${DKIM_SELECTOR:-mail}
     INTERVAL=${DKIM_SYNC_INTERVAL:-10}
     declare -A warned
+    word=
 
     # Said once per watcher, not every $INTERVAL seconds.
     warn_once() {
@@ -125,19 +126,31 @@ data:
       [ -f "$1" ] && [ ! -L "$1" ]
     }
 
-    # The word a selector or acknowledgement file holds, nothing when it isn't a plain file. Long enough for any selector.
+    # Sets $word to what a selector or acknowledgement file holds, empty when it isn't a plain file. Long enough for any selector. This
+    # (and the parameter expansions below, rather than basename and dirname) starts no process: a pass does it for every domain, every
+    # $DKIM_SYNC_INTERVAL seconds, next to Postfix and OpenDKIM.
     read_word() {
-      regular "$1" && head -c 64 "$1" | tr -d '[:space:]'
+      local w
+      word=
+      regular "$1" || return 0
+      IFS= read -r -d '' -n 64 w 2>/dev/null < "$1"
+      word=${w//[[:space:]]/}
     }
 
     # The domains the main service has keys for: those a rotation gave a selector of their own, and those with a key for the global one.
     domains() {
       local f
       for f in "$SRC"/*.selector; do
-        [ -e "$f" ] || [ -L "$f" ] && basename "$f" .selector
+        if [ -e "$f" ] || [ -L "$f" ]; then
+          f=${f##*/}
+          echo "${f%.selector}"
+        fi
       done
       for f in "$SRC"/*."$SEL".key; do
-        regular "$f" && basename "$f" ".$SEL.key"
+        if regular "$f"; then
+          f=${f##*/}
+          echo "${f%".$SEL.key"}"
+        fi
       done
     }
 
@@ -146,22 +159,26 @@ data:
     install_key() {
       local d=$1 sel=$SEL src dst
       if [ -e "$SRC/$d.selector" ] || [ -L "$SRC/$d.selector" ]; then
-        sel=$(read_word "$SRC/$d.selector")
+        read_word "$SRC/$d.selector"
+        sel=$word
         if ! is_selector "$sel"; then
           warn_once "$d:$sel" "Ignoring $SRC/$d.selector: '$sel' is not a DKIM selector, so $d keeps the key it is signed with"
           return
         fi
       fi
       src="$SRC/$d.$sel.key"
-      # Not yet fully written, or not a key at all: try again next time.
-      regular "$src" && openssl pkey -in "$src" -noout >/dev/null 2>&1 || return
+      regular "$src" || return
       dst="$KEYS/$d/$sel.private"
+      # The key already installed was checked then, so only one that differs is (openssl is the one process here that costs real time).
       if ! cmp -s "$src" "$dst"; then
+        # Not yet fully written, or not a key at all: try again next time.
+        openssl pkey -in "$src" -noout >/dev/null 2>&1 || return
         install -d -o opendkim -g opendkim -m 0750 "$KEYS/$d" && install -o opendkim -g opendkim -m 0400 "$src" "$dst" || return
         echo "Using the main service's DKIM key for $d (selector $sel)"
         changed=1
       fi
-      if [ "$(read_word "$KEYS/$d/selector")" != "$sel" ]; then
+      read_word "$KEYS/$d/selector"
+      if [ "$word" != "$sel" ]; then
         printf '%s\n' "$sel" > "$KEYS/$d/selector.tmp" && mv -fT "$KEYS/$d/selector.tmp" "$KEYS/$d/selector" || return
         changed=1
       fi
@@ -170,7 +187,9 @@ data:
       if ! cmp -s "$src" "$KEYS/$d.private"; then
         install -o opendkim -g opendkim -m 0400 "$src" "$KEYS/$d.private"
       fi
-      rm -f "$KEYS/$d.txt"
+      if [ -e "$KEYS/$d.txt" ] || [ -L "$KEYS/$d.txt" ]; then
+        rm -f "$KEYS/$d.txt"
+      fi
     }
 
     # Removes the key of a selector a domain is no longer signed with once the main service has deleted it, so a retired key lives
@@ -181,10 +200,12 @@ data:
       for dir in "$KEYS"/*/; do
         dir=${dir%/}
         regular "$dir/selector" || continue
-        d=$(basename "$dir")
-        cur=$(read_word "$dir/selector")
+        d=${dir##*/}
+        read_word "$dir/selector"
+        cur=$word
         for k in "$dir"/*.private; do
-          s=$(basename "$k" .private)
+          s=${k##*/}
+          s=${s%.private}
           [ -f "$k" ] && [ "$s" != "$cur" ] && [ "$s" != "${prev[$d]}" ] && [ ! -e "$SRC/$d.$s.key" ] || continue
           rm -f "$k"
           echo "Removed the retired DKIM key of $d (selector $s)"
@@ -200,7 +221,8 @@ data:
       for d in "${!server[@]}"; do
         sel=${signed[$d]}
         [ -n "$sel" ] && [ "${prev[$d]}" = "$sel" ] || continue
-        [ "$(read_word "$SRC/$d.signing")" = "$sel" ] && continue
+        read_word "$SRC/$d.signing"
+        [ "$word" = "$sel" ] && continue
         tmp=$(mktemp -u "$SRC/.$d.signing.XXXXXXXX")
         if (set -C; printf '%s\n' "$sel" > "$tmp") 2>/dev/null && mv -fT "$tmp" "$SRC/$d.signing" 2>/dev/null; then
           echo "OpenDKIM signs $d with selector $sel"
@@ -235,8 +257,10 @@ data:
       # (one the image generated, or one put there by hand), signed with the global selector as before rotation existed.
       for k in "$KEYS"/*/selector; do
         regular "$k" || continue
-        d=$(basename "$(dirname "$k")")
-        sel=$(read_word "$k")
+        d=${k%/selector}
+        d=${d##*/}
+        read_word "$k"
+        sel=$word
         is_host "$d" && is_selector "$sel" && regular "$KEYS/$d/$sel.private" || continue
         signed[$d]=$sel
         echo "$sel._domainkey.$d $d:$sel:$KEYS/$d/$sel.private" >> "$keytable"
@@ -244,7 +268,8 @@ data:
       done
       for k in "$KEYS"/*.private; do
         [ -f "$k" ] || continue
-        d=$(basename "$k" .private)
+        d=${k##*/}
+        d=${d%.private}
         is_host "$d" && [ -z "${signed[$d]}" ] || continue
         echo "$SEL._domainkey.$d $d:$SEL:$k" >> "$keytable"
         echo "*@$d $SEL._domainkey.$d" >> "$signing"
