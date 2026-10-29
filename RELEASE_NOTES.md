@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.6.0
+
 ### Helm chart
 
 * **DKIM keys can rotate per domain:** `dkim-sync.sh` signs each domain with the selector the RapidMX server names in `<domain>.selector` on the shared DKIM volume (the global `dkim.selector` for a domain without one, so nothing changes until a domain's first rotation), keeping that selector's key at `/etc/opendkim/keys/<domain>/<selector>.private` (and the key it moved off until the server deletes it at the end of the overlap, so mail on a session opened before the reload is still signed), and on the pass after OpenDKIM was asked to reload writes `<domain>.signing` back, which the server's DKIM rotation waits for before it retires the old key. Only plain files are read from the shared volume, and `<domain>.signing` is written as a new file renamed over it, never through a link. The `dkim-keys-sync` init container and the Postfix container's startup now run the same script once, so OpenDKIM starts with each domain's own selector and every domain the server has a key for, not only `domains`

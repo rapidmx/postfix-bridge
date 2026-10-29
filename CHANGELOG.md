@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-29
+
+### Added
+- Added the missing "Enable corepack" step to the validate job - every other job already has it, and without it yarn runs the container's stock Yarn 1.22.22 instead of the packageManager-pinned version, which refuses to run at all against a packageManager field, so validate's yarn npm audit never actually ran regardless of real findings. Confirmed on rapidmx/server's identical job via a real CI log; this repo's validate job is the same template and shares the same latent gap even where it happened not to manifest yet
+- Added dkim-sync.sh --once and the DKIM_KEYS_DIR and DKIM_TABLE_DIR settings, and run one pass in the dkim-keys-sync init container and in opendkim.sh before OpenDKIM starts, replacing the init container's own copy loop
+- Added dkim-sync.sh tests running the script with real bash and openssl
+- Added the rule that the more specific agent model assignment wins where categories overlap
+
+### Changed
+- Document that a downstream package's release bump level follows its upstream dependency's, minor for minor, patch for patch and major for major, in NOTES
+- Document the standing wait-for-green-CI-before-releasing rule in NOTES, per JP
+- Publish a release tag's image and chart only once every other job of its run and every other CI run of its commit has finished green
+- Sign each domain in dkim-sync.sh with the DKIM selector the RapidMX server names in <domain>.selector, falling back to the global DKIM_SELECTOR for a domain without one, with the selector's key at /etc/opendkim/keys/<domain>/<selector>.private, the selector in use recorded in <domain>/selector and <domain>.private kept as a copy of that key
+- Keep the key a domain moves off until the server deletes its source key and the previous pass's tables no longer name it, so messages on a session opened before OpenDKIM's reload are still signed
+- Write <domain>.signing for each of the server's domains on the pass after the one that put its selector in the tables, and only while OpenDKIM runs
+- Read only plain files from the shared DKIM volume and write <domain>.signing as an exclusive create under a random name renamed over it, never through a link or into a directory
+- Correct the dkim-opendkim-keys comment, which described an opendkim-genkey layout the image never read
+- Describe per-domain DKIM selectors in the README and release notes
+- Refresh smtp-server, nodemailer, vite, brace-expansion, source-map-js and undici in the lockfile for high-severity advisories
+- Name the node types in tsconfig.json, since smtp-server's own types no longer pull them in under TypeScript 6
+- Record the standing agent model assignments in the project notes
+- Move the agent model assignments to the top of the project notes, keeping session history at the bottom
+- Update the agent model assignments to JP's revised criteria: Sonnet for general code and review, Opus for architecture, planning, investigation, security and performance, Haiku for simple operations
+- Make dkim-sync.sh read words with the read builtin, split paths with parameter expansion, run openssl pkey only when the source key differs from the installed copy and rm only when the .txt file exists, so a pass over unchanged domains starts only the cmp calls, with a Cost of a pass test counting the processes
+- Install corepack with npm before enabling it in both Dockerfile stages since node:lts-trixie-slim is Node 26, which no longer ships it
+
 ## [1.5.0] - 2026-09-23
 
 ### Added
@@ -110,7 +136,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed @rapidrest/cli as a dep
 
-[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/rapidmx/postfix-bridge/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/rapidmx/postfix-bridge/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/rapidmx/postfix-bridge/compare/v1.3.0...v1.4.0
