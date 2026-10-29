@@ -5,7 +5,7 @@ COPY . ./
 
 ARG NODE_ENV=production
 ENV NODE_ENV=${NODE_ENV}
-RUN corepack enable
+RUN npm install --global corepack && corepack enable
 RUN yarn install --immutable
 RUN yarn build
 
@@ -15,7 +15,7 @@ COPY --from=builder --chown=node:node /app/package.json /app/yarn.lock /app/.yar
 COPY --from=builder --chown=node:node /app/.yarn/releases ./.yarn/releases
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
-RUN corepack enable
+RUN npm install --global corepack && corepack enable
 
 ARG NODE_ENV=production
 ENV NODE_ENV=${NODE_ENV}
